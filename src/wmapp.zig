@@ -1,0 +1,5 @@
+const WM_APP = 0x8000;
+
+pub const CHILD_PROCESS_DATA = WM_APP + 0;
+
+pub const CHILD_PROCESS_DATA_RESULT = 0x1bb502b6;
