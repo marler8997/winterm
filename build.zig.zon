@@ -1,0 +1,14 @@
+.{
+    .name = "winterm",
+    .version = "0.0.0",
+    .minimum_zig_version = "0.13.0",
+    .dependencies = .{
+        .direct2d = .{
+            .url = "git+https://github.com/marler8997/direct2d-zig#6c6597a3a80203ee144bd97efc269e33c0653864",
+            .hash = "1220ca85f461de70a9859eb3ea79b9fec266c533033a194ec688f8ebc59b17722f0b",
+        },
+    },
+    .paths = .{
+        ".",
+    },
+}
