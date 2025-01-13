@@ -19,6 +19,7 @@ dirty: bool = true,
 high_surrogate: ?u16 = null,
 input: PagedMem(std.mem.page_size) = .{},
 buffer: PagedMem(std.mem.page_size) = .{},
+buffer_write_cursor: usize = 0,
 
 child_process: ?ChildProcess = null,
 
@@ -95,14 +96,22 @@ fn doAction(self: *Terminal, action: ghostty.terminal.Parser.Action) void {
                 "todo: handle invalid codepoint {} (0x{0x}) ({s})",
                 .{ codepoint, @errorName(e) },
             );
-            self.buffer.writer().writeAll(utf8_buf[0..utf8_len]) catch |e| oom(e);
+            self.bufferWrite(utf8_buf[0..utf8_len]);
             // TODO: don't mark as dirty if the end of the buffer
             //       is not in view
             self.dirty = true;
         },
         .execute => |control_code| switch (control_code) {
             '\n' => {
-                self.buffer.writer().writeByte('\n') catch |e| oom(e);
+                std.debug.assert(self.buffer_write_cursor <= self.buffer.len);
+                while (self.buffer_write_cursor < self.buffer.len) {
+                    if (self.buffer.getByte(self.buffer_write_cursor) == '\n') {
+                        self.buffer_write_cursor += 1;
+                        return;
+                    }
+                    self.buffer_write_cursor += 1;
+                }
+                self.bufferWrite("\n");
                 // TODO: don't mark as dirty if the end of the buffer
                 //       is not in view
                 self.dirty = true;
@@ -157,11 +166,28 @@ pub fn addInput(self: *Terminal, utf8: []const u8) void {
     self.dirty = true;
 }
 
+fn bufferWrite(self: *Terminal, data: []const u8) void {
+    std.debug.assert(self.buffer_write_cursor <= self.buffer.len);
+    const cursor_at_end = (self.buffer_write_cursor == self.buffer.len);
+    self.buffer.writer().writeAll(data) catch |e| oom(e);
+    if (cursor_at_end) {
+        self.buffer_write_cursor = self.buffer.len;
+    }
+}
+fn bufferPrint(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
+    std.debug.assert(self.buffer_write_cursor <= self.buffer.len);
+    const cursor_at_end = (self.buffer_write_cursor == self.buffer.len);
+    self.buffer.writer().print(fmt, args) catch |e| oom(e);
+    if (cursor_at_end) {
+        self.buffer_write_cursor = self.buffer.len;
+    }
+}
+
 fn appendError(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (self.buffer.len > 0 and self.buffer.lastByte() != '\n') {
-        self.buffer.writeByte('\n') catch |e| oom(e);
+        self.bufferWrite("\n");
     }
-    self.buffer.writer().print(fmt ++ "\n", args) catch |e| oom(e);
+    self.bufferPrint(fmt ++ "\n", args);
 }
 
 pub fn execute(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16) void {
@@ -218,19 +244,19 @@ pub fn execute2(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u1
             .index = command_start,
         };
         if (self.buffer.len > 0 and self.buffer.lastByte() != '\n') {
-            self.buffer.writeByte('\n') catch |e| oom(e);
+            self.bufferWrite("\n");
         }
-        self.buffer.writer().writeAll("> ") catch |e| oom(e);
+        self.bufferWrite("> ");
         while (true) {
             const save_pos = it.index;
             const entry = it.next() orelse break;
             for (save_pos..it.index) |i| {
-                self.buffer.writeByte(self.input.getByte(i)) catch |e| oom(e);
+                self.bufferWrite(&[_]u8{self.input.getByte(i)});
             }
             const value = entry.value orelse return out_err.setZig("DecodeCommand", error.InvalidUtf8);
             al.append(arena.allocator(), value) catch |e| oom(e);
         }
-        self.buffer.writeByte('\n') catch |e| oom(e);
+        self.bufferWrite("\n");
         break :blk al.toOwnedSliceSentinel(arena.allocator(), 0) catch |e| oom(e);
     };
 
@@ -241,10 +267,10 @@ pub fn execute2(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u1
     }
     if (std.mem.eql(u16, command_stripped, win32.L("test"))) {
         for (0..20) |i| {
-            self.buffer.writer().print(
+            self.bufferPrint(
                 "Winterm is comming ({})...\n",
                 .{i},
-            ) catch |e| oom(e);
+            );
         }
         return;
     }

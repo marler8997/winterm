@@ -91,6 +91,9 @@ pub fn PagedMem(comptime page_size: usize) type {
             return .{ .len = len, .pages = self.mmu.items.ptr };
         }
 
+        pub fn setByte(self: *const Self, offset: usize, value: u8) void {
+            self.mmu.items[@divTrunc(offset, page_size)][offset % page_size] = value;
+        }
         pub fn getByte(self: *const Self, offset: usize) u8 {
             return self.mmu.items[@divTrunc(offset, page_size)][offset % page_size];
         }
