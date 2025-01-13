@@ -7,6 +7,11 @@ pub fn build(b: *std.Build) void {
     const win32_dep = b.dependency("win32", .{});
     const win32_mod = win32_dep.module("zigwin32");
 
+    const ghostty_dep = b.dependency("ghostty", .{});
+    const ghostty_terminal_mod = b.createModule(.{
+        .root_source_file = ghostty_dep.path("src/terminal/main.zig"),
+    });
+
     {
         const exe = b.addExecutable(.{
             .name = "winterm",
@@ -19,6 +24,7 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(exe);
 
         exe.root_module.addImport("win32", win32_mod);
+        exe.root_module.addImport("ghostty_terminal", ghostty_terminal_mod);
 
         exe.subsystem = .Windows;
         exe.addIncludePath(b.path("res"));

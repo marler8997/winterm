@@ -2,6 +2,9 @@ const Terminal = @This();
 
 const std = @import("std");
 const win32 = @import("win32").everything;
+const ghostty = struct {
+    const terminal = @import("ghostty_terminal");
+};
 const Error = @import("Error.zig");
 const main = @import("main.zig");
 const PagedMem = @import("pagedmem.zig").PagedMem;
@@ -25,6 +28,7 @@ const ChildProcess = struct {
     thread: std.Thread,
     job: win32.HANDLE,
     process_handle: win32.HANDLE,
+    parser: ghostty.terminal.Parser,
 };
 const Pty = struct {
     write: win32.HANDLE,
@@ -68,12 +72,48 @@ fn isUtf8Extension(c: u8) bool {
 
 pub fn onChildProcessData(self: *Terminal, data: []const u8) void {
     std.debug.assert(data.len > 0);
-    // NOTE: would be pretty easy to keep the process alive and just
-    //       render an out of memory message somewhere
-    self.buffer.writer().writeAll(data) catch |e| oom(e);
-    // for now we're just assuming the new data will affect what's being
-    // renderered but this may not actually be the case
-    self.dirty = true;
+    const child_process = &(self.child_process orelse std.debug.panic(
+        "got child process data without a child process: {}",
+        .{std.zig.fmtEscapes(data)},
+    ));
+    for (data) |c| {
+        const actions = child_process.parser.next(c);
+        for (actions) |maybe_action| {
+            if (maybe_action) |a| self.doAction(a);
+        }
+    }
+}
+
+fn doAction(self: *Terminal, action: ghostty.terminal.Parser.Action) void {
+    switch (action) {
+        .print => |codepoint| {
+            var utf8_buf: [7]u8 = undefined;
+            const utf8_len: u3 = std.unicode.utf8Encode(
+                codepoint,
+                &utf8_buf,
+            ) catch |e| std.debug.panic(
+                "todo: handle invalid codepoint {} (0x{0x}) ({s})",
+                .{ codepoint, @errorName(e) },
+            );
+            self.buffer.writer().writeAll(utf8_buf[0..utf8_len]) catch |e| oom(e);
+            // TODO: don't mark as dirty if the end of the buffer
+            //       is not in view
+            self.dirty = true;
+        },
+        .execute => |control_code| switch (control_code) {
+            '\n' => {
+                self.buffer.writer().writeByte('\n') catch |e| oom(e);
+                // TODO: don't mark as dirty if the end of the buffer
+                //       is not in view
+                self.dirty = true;
+            },
+            else => std.log.info(
+                "todo: handle control code {} (0x{0x}) \"{}\"",
+                .{ control_code, std.zig.fmtEscapes(&[_]u8{control_code}) },
+            ),
+        },
+        else => std.log.info("todo: perform action {}", .{action}),
+    }
 }
 
 pub fn updateColRowCounts(self: *Terminal, col_count: u16, row_count: u16) void {
@@ -388,6 +428,7 @@ pub fn execute2(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u1
         .thread = thread,
         .job = job,
         .process_handle = process_info.hProcess.?,
+        .parser = .{},
     };
 }
 

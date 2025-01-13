@@ -23,3 +23,5 @@ The renderer is pretty much done. VT parsing is not implemented and IO with the 
 # Acknowledgements
 
 This project was inspired by Casey Muratori's refterm, which provided valuable architectural insights and reference implementation.
+
+This project also leverages libGhostty, thanks to Mitchell and the Ghostty community for their work.
