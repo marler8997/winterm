@@ -10,6 +10,8 @@ const Screen = @import("Screen.zig");
 const wmapp = @import("wmapp.zig");
 const XY = @import("xy.zig").XY;
 
+// true if the terminal has been updated in some way that
+// it needs to update the screen
 dirty: bool = true,
 high_surrogate: ?u16 = null,
 input: PagedMem(std.mem.page_size) = .{},
@@ -119,8 +121,7 @@ fn appendError(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (self.buffer.len > 0 and self.buffer.lastByte() != '\n') {
         self.buffer.writeByte('\n') catch |e| oom(e);
     }
-    self.buffer.writer().print(fmt, args) catch |e| oom(e);
-    self.buffer.writeByte('\n') catch |e| oom(e);
+    self.buffer.writer().print(fmt ++ "\n", args) catch |e| oom(e);
 }
 
 pub fn execute(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16) void {
@@ -130,12 +131,32 @@ pub fn execute(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16
     };
 }
 pub fn execute2(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16, out_err: *Error) error{Error}!void {
+    const command_start = self.input.scanBackwardsScalar(self.input.len, '\n');
+
     if (self.child_process) |child_process| {
-        _ = child_process;
-        @panic("TODO: handle input with running process");
+        self.input.writeByte('\r') catch |e| oom(e);
+        self.input.writeByte('\n') catch |e| oom(e);
+        self.dirty = true;
+        const pty = child_process.pty orelse {
+            self.appendError("error: pty closed", .{});
+            return;
+        };
+        var next: usize = command_start;
+        while (next < self.input.len) : (next += 1) {
+            const b = [_]u8{self.input.getByte(next)};
+            var written: u32 = undefined;
+            if (0 == win32.WriteFile(
+                pty.write,
+                &b,
+                1,
+                &written,
+                null,
+            )) std.debug.panic("WriteFile failed, error={}", .{win32.GetLastError().fmt()});
+            std.debug.assert(written == 1);
+        }
+        return;
     }
 
-    const command_start = self.input.scanBackwardsScalar(self.input.len, '\n');
     const command_limit = self.input.len;
     if (command_start == command_limit) {
         // beep?
