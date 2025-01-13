@@ -36,6 +36,8 @@ const global = struct {
     var screen: Screen = .{};
 
     var terminal: Terminal = .{};
+    var execute_shell_on_wm_size = true;
+    var exit_when_child_exits = true;
 };
 
 const State = struct {
@@ -286,7 +288,10 @@ pub export fn wWinMain(
         defer it.deinit();
         std.debug.assert(it.skip()); // skip the executable name
         while (it.next()) |arg| {
-            if (false) {} else if (std.mem.eql(u8, arg, "--left")) {
+            if (false) {} else if (std.mem.eql(u8, arg, "--no-shell")) {
+                global.execute_shell_on_wm_size = false;
+                global.exit_when_child_exits = false;
+            } else if (std.mem.eql(u8, arg, "--left")) {
                 const str = it.next() orelse std.debug.panic("missing argument for --left", .{});
                 opt.window_placement.left = std.fmt.parseInt(i32, str, 10) catch std.debug.panic(
                     "--left cmdline option '{s}' is not a number",
@@ -442,6 +447,9 @@ pub export fn wWinMain(
             flushMessages();
             global.terminal.joinChildProcess(child_process_handle);
             win32.invalidateHwnd(hwnd);
+            if (global.exit_when_child_exits) {
+                win32.PostQuitMessage(0);
+            }
         } else std.debug.assert(wait_result == 1);
 
         flushMessages();
@@ -553,6 +561,14 @@ fn WndProc(
             global.screen.col_count = col_count;
             global.screen.row_count = row_count;
             global.terminal.updateColRowCounts(col_count, row_count);
+            // we wait until we have a size to start the terminal
+            // because CreatePseudoConsole fails if the size is 0, which,
+            // seem silly
+            if (global.execute_shell_on_wm_size) {
+                global.terminal.addInput("C:\\Windows\\System32\\cmd.exe");
+                global.terminal.flushInput(hwnd, global.screen.col_count, global.screen.row_count);
+                global.execute_shell_on_wm_size = false;
+            }
             win32.invalidateHwnd(hwnd);
             return 0;
         },
@@ -609,6 +625,20 @@ fn WndProc(
             state.bounds = null;
             return 0;
         },
+        win32.WM_KEYDOWN => {
+            // NOTE: we only handle characters that we don't receive in WM_CHAR
+            const key: Terminal.Key = switch (wparam) {
+                @intFromEnum(win32.VK_LEFT) => .left,
+                @intFromEnum(win32.VK_UP) => .up,
+                @intFromEnum(win32.VK_RIGHT) => .right,
+                @intFromEnum(win32.VK_DOWN) => .down,
+                else => return 0,
+            };
+            const was_dirty = global.terminal.dirty;
+            global.terminal.keyDown(key);
+            if (!was_dirty and global.terminal.dirty) win32.invalidateHwnd(hwnd);
+            return 0;
+        },
         win32.WM_CHAR => switch (wparam) {
             @intFromEnum(win32.VK_BACK) => {
                 if (global.terminal.backspace()) {
@@ -617,27 +647,26 @@ fn WndProc(
                 return 0;
             },
             @intFromEnum(win32.VK_RETURN) => {
-                global.terminal.execute(
-                    hwnd,
-                    global.screen.col_count,
-                    global.screen.row_count,
-                );
+                global.terminal.flushInput(hwnd, global.screen.col_count, global.screen.row_count);
                 win32.invalidateHwnd(hwnd);
                 return 0;
             },
             else => |char_wparam| {
-                const char: u16 = std.math.cast(u16, char_wparam) orelse {
-                    // TODO: should we log a warning or something?
-                    return 0;
-                };
-
+                const char: u16 = std.math.cast(u16, char_wparam) orelse std.debug.panic(
+                    "unexpected WM_CHAR {}",
+                    .{char_wparam},
+                );
+                const input_log = std.log.scoped(.input);
                 const maybe_high_surrogate = global.terminal.high_surrogate;
                 global.terminal.high_surrogate = null;
                 if (std.unicode.utf16IsHighSurrogate(char)) {
-                    if (maybe_high_surrogate) |s| {
-                        // todo: should we log a warning or something?
-                        _ = s;
+                    if (maybe_high_surrogate) |high_surrogate| {
+                        input_log.warn(
+                            "high surrogate: {} discarded (followed by another high surrogate)",
+                            .{high_surrogate},
+                        );
                     }
+                    input_log.info("high surrogate: {} set", .{char});
                     global.terminal.high_surrogate = char;
                     return 0;
                 }
@@ -646,26 +675,46 @@ fn WndProc(
                     if (maybe_high_surrogate) |high_surrogate| {
                         const pair = [2]u16{ high_surrogate, char };
                         if (std.unicode.utf16DecodeSurrogatePair(&pair)) |cp| {
+                            input_log.info(
+                                "surrogate pair: {} {} to codepoint {}",
+                                .{ high_surrogate, char, cp },
+                            );
                             break :blk cp;
                         } else |e| switch (e) {
                             error.ExpectedSecondSurrogateHalf => {
-                                // todo: should we log an error or something? dropping high_surrogate?
+                                input_log.warn(
+                                    "high surrogate: {} discarded (followed by non-surrogate)",
+                                    .{high_surrogate},
+                                );
                             },
                         }
                     }
                     break :blk char;
                 };
 
-                var utf8: [7]u8 = undefined;
-                const len: u3 = std.unicode.utf8Encode(codepoint, &utf8) catch |e| switch (e) {
+                var utf8_buf: [7]u8 = undefined;
+                const len: u3 = std.unicode.utf8Encode(codepoint, &utf8_buf) catch |e| switch (e) {
                     error.Utf8CannotEncodeSurrogateHalf,
                     error.CodepointTooLarge,
                     => {
-                        std.log.warn("failed to encode {} (0x{0x}) with {s}", .{ codepoint, @errorName(e) });
+                        std.log.warn(
+                            "failed to encode {} (0x{0x}) with {s}",
+                            .{ codepoint, @errorName(e) },
+                        );
                         return 0;
                     },
                 };
-                global.terminal.addInput(utf8[0..len]);
+                var high_surrogate_str_buf: [50]u8 = undefined;
+                const high_surrogate_str: []const u8 = if (maybe_high_surrogate) |h|
+                    (std.fmt.bufPrint(&high_surrogate_str_buf, "{} ", .{h}) catch unreachable)
+                else
+                    "";
+                const utf8 = utf8_buf[0..len];
+                input_log.debug(
+                    "WM_CHAR {s}{} cp={} \"{}\"",
+                    .{ high_surrogate_str, char, codepoint, std.zig.fmtEscapes(utf8) },
+                );
+                global.terminal.addInput(utf8);
                 win32.invalidateHwnd(hwnd);
                 return 0;
             },

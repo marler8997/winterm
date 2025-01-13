@@ -38,7 +38,19 @@ const Pty = struct {
         win32.ClosePseudoConsole(self.hpcon);
         win32.closeHandle(self.write);
     }
+    pub fn writer(self: Pty) FileWriter {
+        return .{ .context = self.write };
+    }
 };
+
+const FileWriter = std.io.Writer(
+    win32.HANDLE,
+    std.os.windows.WriteFileError,
+    writeFile,
+);
+fn writeFile(handle: win32.HANDLE, bytes: []const u8) std.os.windows.WriteFileError!usize {
+    return try std.os.windows.WriteFile(handle, bytes, null);
+}
 
 // this must be called before calling joinChildProcess
 pub fn closePty(self: *Terminal, process_handle: win32.HANDLE) void {
@@ -155,6 +167,32 @@ pub fn backspace(self: *Terminal) bool {
     return modified;
 }
 
+pub const Key = enum {
+    // zig fmt: off
+    up, down, right, left,
+    // zig fmt: on
+};
+pub fn keyDown(self: *Terminal, key: Key) void {
+    if (self.child_process) |child_process| {
+        const pty = child_process.pty orelse {
+            std.log.info("can't send key {s}, pty closed", .{@tagName(key)});
+            return;
+        };
+        const seq: []const u8 = switch (key) {
+            .up => "\x1b[A",
+            .down => "\x1b[B",
+            .left => "\x1b[D",
+            .right => "\x1b[C",
+        };
+        pty.writer().writeAll(seq) catch |e| std.debug.panic(
+            "todo: handle pty write error {s}",
+            .{@errorName(e)},
+        );
+        return;
+    }
+    std.log.err("TODO: handle keydown '{s}' with no child process", .{@tagName(key)});
+}
+
 pub fn addInput(self: *Terminal, utf8: []const u8) void {
     std.debug.assert(utf8.len > 0);
     var copied: usize = 0;
@@ -193,35 +231,35 @@ fn appendError(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     self.bufferPrint(fmt ++ "\n", args);
 }
 
-pub fn execute(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16) void {
+pub fn flushInput(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16) void {
     var err: Error = undefined;
-    self.execute2(hwnd, col_count, row_count, &err) catch {
+    self.flushInput2(hwnd, col_count, row_count, &err) catch {
         self.appendError("error: {}", .{err});
     };
 }
-pub fn execute2(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16, out_err: *Error) error{Error}!void {
+
+fn flushInput2(
+    self: *Terminal,
+    hwnd: win32.HWND,
+    col_count: u16,
+    row_count: u16,
+    out_err: *Error,
+) error{Error}!void {
     const command_start = self.input.scanBackwardsScalar(self.input.len, '\n');
 
     if (self.child_process) |child_process| {
-        self.input.writeByte('\r') catch |e| oom(e);
-        self.input.writeByte('\n') catch |e| oom(e);
+        self.input.writer().writeAll("\r\n") catch |e| oom(e);
         self.dirty = true;
         const pty = child_process.pty orelse {
             self.appendError("error: pty closed", .{});
             return;
         };
+        // TODO: coalesce this into bigger writes?
         var next: usize = command_start;
         while (next < self.input.len) : (next += 1) {
-            const b = [_]u8{self.input.getByte(next)};
-            var written: u32 = undefined;
-            if (0 == win32.WriteFile(
-                pty.write,
-                &b,
-                1,
-                &written,
-                null,
-            )) std.debug.panic("WriteFile failed, error={}", .{win32.GetLastError().fmt()});
-            std.debug.assert(written == 1);
+            pty.writer().writeByte(
+                self.input.getByte(next),
+            ) catch |e| return self.appendError("WriteToPty failed with {s}", .{@errorName(e)});
         }
         return;
     }
@@ -323,10 +361,12 @@ pub fn execute2(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u1
             0,
             @ptrCast(&hpcon),
         );
-        if (hr < 0) return out_err.setHresult("CreatePseudoConsole", hr);
+        // important to close these here so our thread won't get stuck
+        // if CreatePseudoConsole fails
         win32.closeHandle(pty_read);
         win32.closeHandle(pty_write);
         pty_handles_closed = true;
+        if (hr < 0) return out_err.setHresult("CreatePseudoConsole", hr);
     }
     errdefer win32.ClosePseudoConsole(hpcon);
 
