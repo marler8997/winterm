@@ -39,6 +39,9 @@ const Rgba8 = packed struct(u32) {
     pub fn initRgb(r: u8, g: u8, b: u8) Color {
         return .{ .r = r, .g = g, .b = b, .a = 255 };
     }
+    pub fn initRgba(r: u8, g: u8, b: u8, a: u8) Color {
+        return .{ .r = r, .g = g, .b = b, .a = a };
+    }
 };
 
 // types shared with the shader

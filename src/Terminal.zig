@@ -617,14 +617,11 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
                     break :blk ' ';
                 };
                 const progress: f32 = if (buffer_row_count == 1) 1.0 else @as(f32, @floatFromInt(row_index)) / @as(f32, @floatFromInt(buffer_row_count - 1));
-                const ice_r = 185;
-                const ice_g = 232;
-                const ice_b = 234;
-                const bg = render.Color.initRgb(19, 19, 19);
+                const bg = render.Color.initRgba(0, 0, 0, 0);
                 const fg = render.Color.initRgb(
-                    70 + @as(u8, @intFromFloat(@as(f32, ice_r - 70) * progress)),
-                    70 + @as(u8, @intFromFloat(@as(f32, ice_g - 70) * progress)),
-                    70 + @as(u8, @intFromFloat(@as(f32, ice_b - 70) * progress)),
+                    lerpInt(u8, 150, 230, progress),
+                    lerpInt(u8, 200, 250, progress),
+                    lerpInt(u8, 210, 255, progress),
                 );
                 cell.* = .{
                     .codepoint = codepoint,
@@ -637,13 +634,18 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
                 const codepoint = command_it.next() orelse ' ';
                 cell.* = .{
                     .codepoint = codepoint,
-                    .background = render.Color.initRgb(19, 19, 19),
+                    .background = render.Color.initRgba(0, 0, 0, 0),
                     .foreground = render.Color.initRgb(185, 232, 234),
                 };
             }
         }
     }
 }
+
+pub fn lerpInt(comptime T: type, start: T, end: T, t: f32) T {
+    return start + @as(T, @intFromFloat(@as(f32, @floatFromInt(end - start)) * t));
+}
+
 fn fatalHr(what: []const u8, hresult: win32.HRESULT) noreturn {
     std.debug.panic("{s} failed, hresult=0x{x}", .{ what, @as(u32, @bitCast(hresult)) });
 }

@@ -17,7 +17,7 @@ A terminal for Windows.
 The renderer is pretty much done. VT parsing is not implemented and IO with the child process isn't quite working.
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/30ad34eb-23af-430e-b72b-e0b0d53efdaf" />
+  <img src="https://github.com/user-attachments/assets/bd567ad1-2bf0-4404-ab50-be18c2880cbe" />
 </p>
 
 # Acknowledgements
