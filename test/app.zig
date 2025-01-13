@@ -5,6 +5,8 @@ pub fn main() !void {
     std.log.info("here", .{});
     try std.io.getStdOut().writer().writeAll("TestAppStdout\n");
     try std.io.getStdErr().writer().writeAll("TestAppStderr\n");
+    try std.io.getStdOut().writer().writeAll("FOO: this line should start with BAR not FOO\rBAR\n");
+    try std.io.getStdOut().writer().writeAll("BAR: this line should start with FOO not BAR\rFOO\n");
 }
 
 pub const std_options: std.Options = .{

@@ -116,6 +116,9 @@ fn doAction(self: *Terminal, action: ghostty.terminal.Parser.Action) void {
                 //       is not in view
                 self.dirty = true;
             },
+            '\r' => {
+                self.buffer_write_cursor = self.buffer.scanBackwardsScalar(self.buffer_write_cursor, '\n');
+            },
             else => std.log.info(
                 "todo: handle control code {} (0x{0x}) \"{}\"",
                 .{ control_code, std.zig.fmtEscapes(&[_]u8{control_code}) },
