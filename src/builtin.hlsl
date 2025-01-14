@@ -35,7 +35,7 @@ float4 UnpackRgba(uint packed)
     return unpacked;
 }
 
-float3 Pixel(float2 pos, float4 bg, float4 fg, float4 glyph_texel)
+float3 Pixel(float2 pos, float4 bg, float4 fg, float glyph_texel)
 {
     float3 cool_rgb_gradient = float3(
         pos.y,
@@ -68,7 +68,7 @@ float3 Pixel(float2 pos, float4 bg, float4 fg, float4 glyph_texel)
 
     float3 combined_bg = lerp(gradient_bg, bg.rgb, bg.a);
     float3 combined_fg = lerp(gradient_fg0, gradient_fg1, fg.rgb);
-    return lerp(combined_bg, combined_fg.rgb, fg.a * glyph_texel.a);
+    return lerp(combined_bg, combined_fg.rgb, fg.a * glyph_texel);
 }
 
 float4 PixelMain(float4 sv_pos : SV_POSITION) : SV_TARGET {
@@ -76,20 +76,20 @@ float4 PixelMain(float4 sv_pos : SV_POSITION) : SV_TARGET {
     uint row = sv_pos.y / cell_size.y;
     uint cell_index = row * col_count + col;
 
-    // const uint DEBUG_MODE_NONE = 0;
-    // const uint DEBUG_MODE_GLYPH_TEXTURE = 2;
+    const uint DEBUG_MODE_NONE = 0;
+    const uint DEBUG_MODE_GLYPH_TEXTURE = 2;
 
-    // const uint DEBUG_MODE = DEBUG_MODE_NONE;
-    //const uint DEBUG_MODE = DEBUG_MODE_GLYPH_TEXTURE;
+    const uint DEBUG_MODE = DEBUG_MODE_NONE;
+    // const uint DEBUG_MODE = DEBUG_MODE_GLYPH_TEXTURE;
 
     Cell cell = cells[cell_index];
     float4 bg = UnpackRgba(cell.bg);
     float4 fg = UnpackRgba(cell.fg);
 
-    // if (DEBUG_MODE == DEBUG_MODE_GLYPH_TEXTURE) {
-    //     float4 glyph_texel = glyph_texture.Load(int3(sv_pos.xy, 0));
-    //     return lerp(cell_bg_color, fg_color, glyph_texel);
-    // }
+    if (DEBUG_MODE == DEBUG_MODE_GLYPH_TEXTURE) {
+        float4 glyph_texel = glyph_texture.Load(int3(sv_pos.xy, 0));
+        return lerp(bg, fg, glyph_texel.a);
+    }
 
     uint texture_width, texture_height;
     glyph_texture.GetDimensions(texture_width, texture_height);
@@ -102,8 +102,8 @@ float4 PixelMain(float4 sv_pos : SV_POSITION) : SV_TARGET {
     );
     uint2 cell_pixel = uint2(sv_pos.xy) % cell_size;
     uint2 texture_coord = glyph_cell_pos * cell_size + cell_pixel;
-    float4 texel = glyph_texture.Load(int3(texture_coord, 0));
+    float4 glyph_texel = glyph_texture.Load(int3(texture_coord, 0));
 
     float2 pos = sv_pos.xy / (cell_size * float2(col_count, row_count));
-    return float4(Pixel(pos, bg, fg, texel), 1.0);
+    return float4(Pixel(pos, bg, fg, glyph_texel.a), 1.0);
 }
