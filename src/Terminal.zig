@@ -656,17 +656,10 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
                     }
                     break :blk ' ';
                 };
-                const progress: f32 = if (buffer_row_count == 1) 1.0 else @as(f32, @floatFromInt(row_index)) / @as(f32, @floatFromInt(buffer_row_count - 1));
-                const bg = render.Color.initRgba(0, 0, 0, 0);
-                const fg = render.Color.initRgb(
-                    lerpInt(u8, 150, 230, progress),
-                    lerpInt(u8, 200, 250, progress),
-                    lerpInt(u8, 210, 255, progress),
-                );
                 cell.* = .{
                     .codepoint = codepoint,
-                    .background = bg,
-                    .foreground = fg,
+                    .background = render.Color.initRgba(0, 0, 0, 0),
+                    .foreground = render.Color.initRgb(255, 255, 255),
                 };
             }
         } else {
@@ -675,7 +668,7 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
                 cell.* = .{
                     .codepoint = codepoint,
                     .background = render.Color.initRgba(0, 0, 0, 0),
-                    .foreground = render.Color.initRgb(185, 232, 234),
+                    .foreground = render.Color.initRgb(255, 255, 255),
                 };
             }
         }

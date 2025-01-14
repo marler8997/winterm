@@ -277,18 +277,23 @@ pub export fn wWinMain(
     _ = cmdline;
     _ = cmdshow;
 
+    var opt_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     var opt: struct {
+        shader: ?[:0]const u8 = null,
         window_placement: WindowPlacementOptions = .{},
     } = .{};
 
     {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer arena.deinit();
-        var it = std.process.ArgIterator.initWithAllocator(arena.allocator()) catch |e| oom(e);
+        var it = std.process.ArgIterator.initWithAllocator(opt_arena.allocator()) catch |e| oom(e);
         defer it.deinit();
         std.debug.assert(it.skip()); // skip the executable name
         while (it.next()) |arg| {
-            if (false) {} else if (std.mem.eql(u8, arg, "--no-shell")) {
+            if (false) {
+                //
+            } else if (std.mem.eql(u8, arg, "--shader")) {
+                const str = it.next() orelse std.debug.panic("missing argument for --shader", .{});
+                opt.shader = opt_arena.allocator().dupeZ(u8, str) catch |e| oom(e);
+            } else if (std.mem.eql(u8, arg, "--no-shell")) {
                 global.execute_shell_on_wm_size = false;
                 global.exit_when_child_exits = false;
             } else if (std.mem.eql(u8, arg, "--left")) {
@@ -314,7 +319,8 @@ pub export fn wWinMain(
         }
     }
 
-    render.init();
+    render.init(.{ .shader = opt.shader });
+    opt_arena.deinit();
 
     const maybe_monitor: ?win32.HMONITOR = blk: {
         break :blk win32.MonitorFromPoint(

@@ -60,7 +60,9 @@ pub const shader = struct {
 
 const swap_chain_flags: u32 = @intFromEnum(win32.DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
 
-pub fn init() void {
+pub fn init(opt: struct {
+    shader: ?[:0]const u8 = null,
+}) void {
     std.debug.assert(!global.init_called);
     global.init_called = true;
     dwrite.init();
@@ -88,7 +90,7 @@ pub fn init() void {
         }
     }
 
-    global.shaders = Shaders.init();
+    global.shaders = Shaders.init(opt.shader);
 
     {
         const desc: win32.D3D11_BUFFER_DESC = .{
@@ -519,8 +521,24 @@ fn initSwapChain(
 const Shaders = struct {
     vertex: *win32.ID3D11VertexShader,
     pixel: *win32.ID3D11PixelShader,
-    pub fn init() Shaders {
-        const shader_source = @embedFile("terminal.hlsl");
+    pub fn init(maybe_file_path: ?[:0]const u8) Shaders {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const shader_source: []const u8 = blk: {
+            if (maybe_file_path) |file_path| {
+                var file = std.fs.cwd().openFileZ(file_path, .{}) catch |e| std.debug.panic(
+                    "failed to open --shader '{s}' with {s}",
+                    .{ file_path, @errorName(e) },
+                );
+                defer file.close();
+                break :blk file.readToEndAlloc(arena.allocator(), std.math.maxInt(usize)) catch |e| std.debug.panic(
+                    "read --shader '{s}' failed with {s}",
+                    .{ file_path, @errorName(e) },
+                );
+            }
+            break :blk @embedFile("builtin.hlsl");
+        };
+        const file = maybe_file_path orelse "builtin.hlsl";
 
         var vs_blob: *win32.ID3DBlob = undefined;
         var error_blob: ?*win32.ID3DBlob = null;
@@ -528,7 +546,7 @@ const Shaders = struct {
             const hr = win32.D3DCompile(
                 shader_source.ptr,
                 shader_source.len,
-                null,
+                file,
                 null,
                 null,
                 "VertexMain",
@@ -550,7 +568,7 @@ const Shaders = struct {
             const hr = win32.D3DCompile(
                 shader_source.ptr,
                 shader_source.len,
-                null,
+                file,
                 null,
                 null,
                 "PixelMain",
