@@ -43,7 +43,6 @@ const global = struct {
 const State = struct {
     hwnd: win32.HWND,
     render_state: render.WindowState,
-    last_sizing_edge: ?win32.WPARAM = null,
     bounds: ?WindowBounds = null,
 };
 fn stateFromHwnd(hwnd: win32.HWND) *State {
@@ -533,14 +532,17 @@ fn WndProc(
             return 0;
         },
         win32.WM_SIZING => {
-            stateFromHwnd(hwnd).last_sizing_edge = wparam;
-            return 0;
-        },
-        win32.WM_EXITSIZEMOVE => {
+            const rect: *win32.RECT = @ptrFromInt(@as(usize, @bitCast(lparam)));
+            const dpi = win32.dpiFromHwnd(hwnd);
+            const font = getFont(dpi, global.font_size, &global.font_face);
+            const cell_size = font.getCellSize(i32);
+            const new_rect = calcWindowRect(dpi, rect.*, wparam, cell_size);
             const state = stateFromHwnd(hwnd);
-            state.bounds = null;
-            updateWindowSize(hwnd, state.last_sizing_edge, &state.bounds);
-            state.last_sizing_edge = null;
+            state.bounds = .{
+                .token = new_rect,
+                .rect = rect.*,
+            };
+            rect.* = new_rect;
             return 0;
         },
         win32.WM_SIZE => {
