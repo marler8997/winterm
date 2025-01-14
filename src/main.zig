@@ -725,7 +725,7 @@ fn WndProc(
             const buffer: [*]const u8 = @ptrFromInt(wparam);
             const len: usize = @bitCast(lparam);
             std.debug.assert(len > 0);
-            global.terminal.onChildProcessData(buffer[0..len]);
+            global.terminal.onChildProcessData(hwnd, buffer[0..len]);
             if (global.terminal.dirty)
                 win32.invalidateHwnd(hwnd);
             return wmapp.CHILD_PROCESS_DATA_RESULT;

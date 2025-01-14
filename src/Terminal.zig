@@ -83,7 +83,7 @@ fn isUtf8Extension(c: u8) bool {
     return (c & 0b1100_0000) == 0b1000_0000;
 }
 
-pub fn onChildProcessData(self: *Terminal, data: []const u8) void {
+pub fn onChildProcessData(self: *Terminal, hwnd: win32.HWND, data: []const u8) void {
     std.debug.assert(data.len > 0);
     const child_process = &(self.child_process orelse std.debug.panic(
         "got child process data without a child process: {}",
@@ -92,12 +92,12 @@ pub fn onChildProcessData(self: *Terminal, data: []const u8) void {
     for (data) |c| {
         const actions = child_process.parser.next(c);
         for (actions) |maybe_action| {
-            if (maybe_action) |a| self.doAction(a);
+            if (maybe_action) |a| self.doAction(hwnd, a);
         }
     }
 }
 
-fn doAction(self: *Terminal, action: ghostty.terminal.Parser.Action) void {
+fn doAction(self: *Terminal, hwnd: win32.HWND, action: ghostty.terminal.Parser.Action) void {
     switch (action) {
         .print => |codepoint| {
             var utf8_buf: [7]u8 = undefined;
@@ -140,6 +140,10 @@ fn doAction(self: *Terminal, action: ghostty.terminal.Parser.Action) void {
         .csi_dispatch => |csi| self.handleCsiDispatch(csi) catch |e| {
             std.log.err("failed to handle csi dispatch {} with {s}", .{ csi, @errorName(e) });
         },
+        // .esc_dispatch
+        .osc_dispatch => |osc| self.handleOscDispatch(hwnd, osc) catch |e| {
+            std.log.err("failed to handle osc dispatch {} with {s}", .{ osc, @errorName(e) });
+        },
         else => std.log.err("todo: handle {}", .{action}),
     }
 }
@@ -169,6 +173,32 @@ fn handleCsiDispatch(self: *Terminal, csi: ghostty.terminal.Parser.Action.CSI) !
             }
         },
         else => return error.Unsupported,
+    }
+}
+
+fn handleOscDispatch(self: *Terminal, hwnd: win32.HWND, osc: ghostty.terminal.osc.Command) !void {
+    _ = self;
+    switch (osc) {
+        .change_window_title => |title| {
+            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer arena.deinit();
+            const err: ?Error = blk: {
+                const title_w = std.unicode.wtf8ToWtf16LeAllocZ(
+                    arena.allocator(),
+                    title,
+                ) catch |e| break :blk .{
+                    .what = "decode window title",
+                    .code = .{ .zig = e },
+                };
+                if (0 == win32.SetWindowTextW(hwnd, title_w)) break :blk .{
+                    .what = "SetWindowText",
+                    .code = .{ .win32 = win32.GetLastError() },
+                };
+                break :blk null;
+            };
+            if (err) |e| std.log.err("{}", .{e});
+        },
+        else => return error.todo,
     }
 }
 
