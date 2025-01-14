@@ -7,6 +7,8 @@ pub fn main() !void {
     try std.io.getStdErr().writer().writeAll("TestAppStderr\n");
     try std.io.getStdOut().writer().writeAll("FOO: this line should start with BAR not FOO\rBAR\n");
     try std.io.getStdOut().writer().writeAll("BAR: this line should start with FOO not BAR\rFOO\n");
+    const clear_screen = "\x1b[2J";
+    try std.io.getStdOut().writer().writeAll(clear_screen);
 }
 
 pub const std_options: std.Options = .{

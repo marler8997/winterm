@@ -114,6 +114,7 @@ fn doAction(self: *Terminal, action: ghostty.terminal.Parser.Action) void {
             self.dirty = true;
         },
         .execute => |control_code| switch (control_code) {
+            // '\b' => {},
             '\n' => {
                 std.debug.assert(self.buffer_write_cursor <= self.buffer.len);
                 while (self.buffer_write_cursor < self.buffer.len) {
@@ -131,12 +132,43 @@ fn doAction(self: *Terminal, action: ghostty.terminal.Parser.Action) void {
             '\r' => {
                 self.buffer_write_cursor = self.buffer.scanBackwardsScalar(self.buffer_write_cursor, '\n');
             },
-            else => std.log.info(
+            else => std.log.err(
                 "todo: handle control code {} (0x{0x}) \"{}\"",
                 .{ control_code, std.zig.fmtEscapes(&[_]u8{control_code}) },
             ),
         },
-        else => std.log.info("todo: perform action {}", .{action}),
+        .csi_dispatch => |csi| self.handleCsiDispatch(csi) catch |e| {
+            std.log.err("failed to handle csi dispatch {} with {s}", .{ csi, @errorName(e) });
+        },
+        else => std.log.err("todo: handle {}", .{action}),
+    }
+}
+
+fn handleCsiDispatch(self: *Terminal, csi: ghostty.terminal.Parser.Action.CSI) !void {
+    switch (csi.final) {
+        'J' => {
+            if (csi.intermediates.len > 0) return error.UnexpectedIntermediates;
+            // Get the erase mode parameter, defaulting to 0 if no params
+            const mode = if (csi.params.len > 0) csi.params[0] else 0;
+            switch (mode) {
+                0 => {
+                    std.log.err("todo: clear screen from cursor down", .{});
+                },
+                1 => {
+                    std.log.err("todo: clear screen from cursor up", .{});
+                },
+                2 => {
+                    // TODO: if not at beginning, ensure there's a bunch
+                    // of newlines at the end of the buffer
+                    _ = self;
+                    std.log.err("todo: clear entire screen", .{});
+                },
+                else => {
+                    std.log.warn("unknown clear screen mode {}", .{mode});
+                },
+            }
+        },
+        else => return error.Unsupported,
     }
 }
 
@@ -151,21 +183,25 @@ pub fn updateColRowCounts(self: *Terminal, col_count: u16, row_count: u16) void 
     if (hr < 0) fatalHr("ResizePseudoConsole", hr);
 }
 
-pub fn backspace(self: *Terminal) bool {
-    if (self.input.len == 0) return false;
-    if (self.input.getByte(self.input.len - 1) == '\n') return false;
-    var new_len: usize = self.input.len;
-    while (true) {
-        new_len -= 1;
-        if (!isUtf8Extension(self.input.getByte(new_len)))
-            break;
-        if (new_len == 0) break;
-    }
-    const modified = (new_len != self.input.len);
-    self.dirty = self.dirty or modified;
-    self.input.len = new_len;
-    return modified;
-}
+// pub fn backspace(self: *Terminal) bool {
+//     if (self.child_process) |child_process| {
+//         const pty = child_process.pty orelse return self.appendError("pty closed", .{});
+//         return pty.writer().writeAll
+//     }
+//     if (self.input.len == 0) return false;
+//     if (self.input.getByte(self.input.len - 1) == '\n') return false;
+//     var new_len: usize = self.input.len;
+//     while (true) {
+//         new_len -= 1;
+//         if (!isUtf8Extension(self.input.getByte(new_len)))
+//             break;
+//         if (new_len == 0) break;
+//     }
+//     const modified = (new_len != self.input.len);
+//     self.dirty = self.dirty or modified;
+//     self.input.len = new_len;
+//     return modified;
+// }
 
 pub const Key = enum {
     // zig fmt: off

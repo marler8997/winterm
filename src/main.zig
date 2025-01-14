@@ -646,12 +646,6 @@ fn WndProc(
             return 0;
         },
         win32.WM_CHAR => switch (wparam) {
-            @intFromEnum(win32.VK_BACK) => {
-                if (global.terminal.backspace()) {
-                    win32.invalidateHwnd(hwnd);
-                }
-                return 0;
-            },
             @intFromEnum(win32.VK_RETURN) => {
                 global.terminal.flushInput(hwnd, global.screen.col_count, global.screen.row_count);
                 win32.invalidateHwnd(hwnd);
