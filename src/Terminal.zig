@@ -195,6 +195,14 @@ pub fn keyDown(self: *Terminal, key: Key) void {
 
 pub fn addInput(self: *Terminal, utf8: []const u8) void {
     std.debug.assert(utf8.len > 0);
+    if (self.child_process) |child_process| {
+        const pty = child_process.pty orelse return self.appendError("pty closed", .{});
+        return pty.writer().writeAll(utf8) catch |e| self.appendError(
+            "write failed with {s}",
+            .{@errorName(e)},
+        );
+    }
+
     var copied: usize = 0;
     while (copied < utf8.len) {
         const read_buf = self.input.getReadBuf() catch |e| oom(e);
@@ -204,6 +212,7 @@ pub fn addInput(self: *Terminal, utf8: []const u8) void {
         copied += copy_len;
         self.input.finishRead(copy_len);
     }
+    // we'll just assume this is true for now
     self.dirty = true;
 }
 
@@ -228,13 +237,13 @@ fn appendError(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (self.buffer.len > 0 and self.buffer.lastByte() != '\n') {
         self.bufferWrite("\n");
     }
-    self.bufferPrint(fmt ++ "\n", args);
+    self.bufferPrint("error: " ++ fmt ++ "\n", args);
 }
 
 pub fn flushInput(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16) void {
     var err: Error = undefined;
     self.flushInput2(hwnd, col_count, row_count, &err) catch {
-        self.appendError("error: {}", .{err});
+        self.appendError("{}", .{err});
     };
 }
 
@@ -251,7 +260,7 @@ fn flushInput2(
         self.input.writer().writeAll("\r\n") catch |e| oom(e);
         self.dirty = true;
         const pty = child_process.pty orelse {
-            self.appendError("error: pty closed", .{});
+            self.appendError("pty closed", .{});
             return;
         };
         // TODO: coalesce this into bigger writes?
@@ -482,9 +491,9 @@ fn flushInput2(
 
     {
         const suspend_count = win32.ResumeThread(process_info.hThread);
-        if (suspend_count == -1) return self.appendError(.{
-            .what = "ResumeThread",
-            .code = .{ .win32 = win32.GetLastError() },
+        if (suspend_count == -1) return out_err.setWin32(.{
+            "ResumeThread",
+            win32.GetLastError(),
         });
     }
 
