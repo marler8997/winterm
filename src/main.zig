@@ -5,12 +5,14 @@ const c = @cImport({
     @cInclude("ResourceNames.h");
 });
 
+const ChildProcess = @import("ChildProcess.zig");
+const Error = @import("Error.zig");
 const FontFace = @import("FontFace.zig");
+const GridPos = @import("GridPos.zig");
 const render = @import("d3d11.zig");
 const Screen = @import("Screen.zig");
 const Terminal = @import("Terminal.zig");
 const windowmsg = @import("windowmsg.zig");
-const wmapp = @import("wmapp.zig");
 const XY = @import("xy.zig").XY;
 
 pub const std_options: std.Options = .{
@@ -24,6 +26,9 @@ const window_style_ex = win32.WINDOW_EX_STYLE{
 };
 const window_style = win32.WS_OVERLAPPEDWINDOW;
 
+const WM_APP_CHILD_PROCESS_DATA = win32.WM_APP + 0;
+const WM_APP_CHILD_PROCESS_DATA_RESULT = 0x1bb502b6;
+
 const global = struct {
     var icons: Icons = undefined;
     var state: ?State = null;
@@ -33,17 +38,26 @@ const global = struct {
     var font: ?Font = null;
 
     var screen_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    var screen: Screen = .{};
+
+    var render_cells_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var render_cells: std.ArrayListUnmanaged(render.Cell) = .{};
 
     var terminal: Terminal = .{};
-    var execute_shell_on_wm_size = true;
-    var exit_when_child_exits = true;
 };
 
 const State = struct {
     hwnd: win32.HWND,
-    render_state: render.WindowState,
     bounds: ?WindowBounds = null,
+    render_state: render.WindowState,
+    screen: Screen,
+    child_process: ChildProcess,
+
+    pub fn reportError(state: *State, comptime fmt: []const u8, args: anytype) void {
+        _ = state;
+        // TODO: put the error somewhere, maybe temporarily
+        //       put it somewhere in the screen?
+        std.log.err("error: " ++ fmt, args);
+    }
 };
 fn stateFromHwnd(hwnd: win32.HWND) *State {
     std.debug.assert(hwnd == global.state.?.hwnd);
@@ -293,8 +307,7 @@ pub export fn wWinMain(
                 const str = it.next() orelse std.debug.panic("missing argument for --shader", .{});
                 opt.shader = opt_arena.allocator().dupeZ(u8, str) catch |e| oom(e);
             } else if (std.mem.eql(u8, arg, "--no-shell")) {
-                global.execute_shell_on_wm_size = false;
-                global.exit_when_child_exits = false;
+                @panic("todo");
             } else if (std.mem.eql(u8, arg, "--left")) {
                 const str = it.next() orelse std.debug.panic("missing argument for --left", .{});
                 opt.window_placement.left = std.fmt.parseInt(i32, str, 10) catch std.debug.panic(
@@ -396,7 +409,7 @@ pub export fn wWinMain(
         null, // parent window
         null, // menu
         win32.GetModuleHandleW(null),
-        null, // WM_CREATE user data
+        null,
     ) orelse fatalWin32("CreateWindow", win32.GetLastError());
 
     {
@@ -426,9 +439,9 @@ pub export fn wWinMain(
     _ = win32.BringWindowToTop(hwnd);
 
     while (true) {
-        const child_process_handle = blk: {
+        const state: *State = blk: {
             while (true) {
-                if (global.terminal.child_process) |*p| break :blk p.process_handle;
+                if (global.state) |*state| break :blk state;
                 var msg: win32.MSG = undefined;
                 const result = win32.GetMessageW(&msg, null, 0, 0);
                 if (result < 0) fatalWin32("GetMessage", win32.GetLastError());
@@ -438,7 +451,7 @@ pub export fn wWinMain(
             }
         };
 
-        var handles = [1]win32.HANDLE{child_process_handle};
+        var handles = [1]win32.HANDLE{state.child_process.process_handle};
         const wait_result = win32.MsgWaitForMultipleObjectsEx(
             1,
             &handles,
@@ -448,13 +461,11 @@ pub export fn wWinMain(
         );
 
         if (wait_result == 0) {
-            global.terminal.closePty(child_process_handle);
+            state.child_process.closePty();
             flushMessages();
-            global.terminal.joinChildProcess(child_process_handle);
+            state.child_process.join();
             win32.invalidateHwnd(hwnd);
-            if (global.exit_when_child_exits) {
-                win32.PostQuitMessage(0);
-            }
+            return 0;
         } else std.debug.assert(wait_result == 1);
 
         flushMessages();
@@ -491,11 +502,64 @@ fn WndProc(
     switch (msg) {
         win32.WM_CREATE => {
             std.debug.assert(global.state == null);
+
+            const client_size = getClientSize(u16, hwnd);
+            const dpi = win32.dpiFromHwnd(hwnd);
+            const font = getFont(dpi, global.font_size, &global.font_face);
+            const cell_size = font.getCellSize(u16);
+            const cell_count: GridPos = .{
+                .row = @intCast(@divTrunc(client_size.y + cell_size.y - 1, cell_size.y)),
+                .col = @intCast(@divTrunc(client_size.x + cell_size.x - 1, cell_size.x)),
+            };
+            if (cell_count.row == 0 or cell_count.col == 0) std.debug.panic("todo: handle cell counts {}", .{cell_count});
+            std.log.info(
+                "screen is {} rows and {} cols (cell size {}x{}, pixel size {}x{})",
+                .{ cell_count.row, cell_count.col, cell_size.x, cell_size.y, client_size.x, client_size.y },
+            );
+
+            const screen = Screen.init(global.screen_arena.allocator(), cell_count) catch |e| oom(e);
+
+            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer arena.deinit();
+            var err: Error = undefined;
+            const child_process = ChildProcess.startConPtyWin32(
+                &err,
+                arena.allocator(),
+                win32.L("C:\\Windows\\System32\\cmd.exe"),
+                null,
+                hwnd,
+                WM_APP_CHILD_PROCESS_DATA,
+                WM_APP_CHILD_PROCESS_DATA_RESULT,
+                cell_count,
+            ) catch std.debug.panic("{}", .{err});
+
+            // TODO: not sure if size will be available yet
+            //if (true) @panic("todo");
             global.state = .{
                 .hwnd = hwnd,
                 .render_state = render.WindowState.init(hwnd),
+                .screen = screen,
+                .child_process = child_process,
             };
             std.debug.assert(&(global.state.?) == stateFromHwnd(hwnd));
+
+            // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            // put in a test pattern for the moment
+            screen.clear();
+            // {
+            //     const pattern = "Winterm is coming...";
+            //     for (screen.cells, 0..) |*cell, i| {
+            //         cell.* = .{
+            //             .glyph_index = global.state.?.render_state.generateGlyph(
+            //                 font,
+            //                 pattern[i % pattern.len ..][0..1],
+            //             ),
+            //             .background = render.Color.initRgba(0, 0, 0, 0),
+            //             .foreground = render.Color.initRgb(255, 0, 0),
+            //         };
+            //     }
+            // }
+
             return 0;
         },
         win32.WM_CLOSE, win32.WM_DESTROY => {
@@ -545,47 +609,73 @@ fn WndProc(
             rect.* = new_rect;
             return 0;
         },
-        win32.WM_SIZE => {
-            const client_size: XY(u16) = .{
-                .x = win32.loword(lparam),
-                .y = win32.hiword(lparam),
-            };
-
-            const do_sanity_check = true;
-            if (do_sanity_check) {
-                const client_size2 = getClientSize(u16, hwnd);
-                std.debug.assert(client_size.x == client_size2.x);
-                std.debug.assert(client_size.y == client_size2.y);
-            }
-
+        win32.WM_WINDOWPOSCHANGED => {
+            const state = stateFromHwnd(hwnd);
+            const client_size = getClientSize(u16, hwnd);
             const dpi = win32.dpiFromHwnd(hwnd);
             const font = getFont(dpi, global.font_size, &global.font_face);
             const cell_size = font.getCellSize(u16);
             const col_count: u16 = @intCast(@divTrunc(client_size.x + cell_size.x - 1, cell_size.x));
             const row_count: u16 = @intCast(@divTrunc(client_size.y + cell_size.y - 1, cell_size.y));
-            const cell_count: usize = @as(usize, col_count) * @as(usize, row_count);
-            global.screen.cells.ensureTotalCapacity(global.screen_arena.allocator(), cell_count) catch |e| oom(e);
-            global.screen.cells.items.len = cell_count;
-            global.screen.col_count = col_count;
-            global.screen.row_count = row_count;
-            global.terminal.updateColRowCounts(col_count, row_count);
-            // we wait until we have a size to start the terminal
-            // because CreatePseudoConsole fails if the size is 0, which,
-            // seem silly
-            if (global.execute_shell_on_wm_size) {
-                global.terminal.addInput("C:\\Windows\\System32\\cmd.exe");
-                global.terminal.flushInput(hwnd, global.screen.col_count, global.screen.row_count);
-                global.execute_shell_on_wm_size = false;
+            if (col_count == state.screen.col_count and row_count == state.screen.row_count)
+                return 0;
+            if (state.screen.resize(
+                global.screen_arena.allocator(),
+                .{ .row = row_count, .col = col_count },
+            ) catch |e| oom(e)) {
+                var err: Error = undefined;
+                state.child_process.resize(&err, .{
+                    .row = row_count,
+                    .col = col_count,
+                }) catch std.debug.panic("{}", .{err});
+                win32.invalidateHwnd(hwnd);
             }
-            win32.invalidateHwnd(hwnd);
             return 0;
         },
         win32.WM_PAINT => {
+            var ps: win32.PAINTSTRUCT = undefined;
+            _ = win32.BeginPaint(hwnd, &ps) orelse fatalWin32("BeginPaint", win32.GetLastError());
+            defer if (0 == win32.EndPaint(hwnd, &ps)) fatalWin32("EndPaint", win32.GetLastError());
+
             const state = stateFromHwnd(hwnd);
+            const client_size = getClientSize(u32, hwnd);
             const dpi = win32.dpiFromHwnd(hwnd);
             const font = getFont(dpi, global.font_size, &global.font_face);
-            global.terminal.update(&global.screen);
-            render.paint(hwnd, &state.render_state, font, &global.screen);
+            const cell_size = font.getCellSize(u16);
+            const col_count: u16 = @intCast(@divTrunc(client_size.x + cell_size.x - 1, cell_size.x));
+            const row_count: u16 = @intCast(@divTrunc(client_size.y + cell_size.y - 1, cell_size.y));
+
+            if (state.screen.resize(
+                global.screen_arena.allocator(),
+                .{ .row = row_count, .col = col_count },
+            ) catch |e| oom(e)) {
+                var err: Error = undefined;
+                state.child_process.resize(&err, .{
+                    .row = row_count,
+                    .col = col_count,
+                }) catch std.debug.panic("{}", .{err});
+            }
+            global.render_cells.resize(
+                global.render_cells_arena.allocator(),
+                state.screen.cells.len,
+            ) catch |e| oom(e);
+            for (state.screen.cells, global.render_cells.items) |*screen_cell, *render_cell| {
+                render_cell.* = .{
+                    .glyph_index = state.render_state.generateGlyph(font, screen_cell.codepoint orelse ' '),
+                    .background = @bitCast(screen_cell.background),
+                    .foreground = @bitCast(screen_cell.foreground),
+                };
+            }
+
+            render.paint(
+                &state.render_state,
+                client_size,
+                font,
+                state.screen.row_count,
+                state.screen.col_count,
+                state.screen.top,
+                global.render_cells.items,
+            );
             return 0;
         },
         win32.WM_GETDPISCALEDSIZE => {
@@ -634,6 +724,11 @@ fn WndProc(
             return 0;
         },
         win32.WM_KEYDOWN => {
+            const state = stateFromHwnd(hwnd);
+            const pty = state.child_process.pty orelse {
+                state.reportError("pty closed", .{});
+                return 0;
+            };
             // NOTE: we only handle characters that we don't receive in WM_CHAR
             const key: Terminal.Key = switch (wparam) {
                 @intFromEnum(win32.VK_LEFT) => .left,
@@ -642,17 +737,13 @@ fn WndProc(
                 @intFromEnum(win32.VK_DOWN) => .down,
                 else => return 0,
             };
-            const was_dirty = global.terminal.dirty;
-            global.terminal.keyDown(key);
-            if (!was_dirty and global.terminal.dirty) win32.invalidateHwnd(hwnd);
+            pty.writer().writeAll(key.escapeSequence()) catch |e| state.reportError(
+                "write to child process failed with {s}",
+                .{@errorName(e)},
+            );
             return 0;
         },
         win32.WM_CHAR => switch (wparam) {
-            @intFromEnum(win32.VK_RETURN) => {
-                global.terminal.flushInput(hwnd, global.screen.col_count, global.screen.row_count);
-                win32.invalidateHwnd(hwnd);
-                return 0;
-            },
             else => |char_wparam| {
                 const char: u16 = std.math.cast(u16, char_wparam) orelse std.debug.panic(
                     "unexpected WM_CHAR {}",
@@ -716,19 +807,30 @@ fn WndProc(
                     "WM_CHAR {s}{} cp={} \"{}\"",
                     .{ high_surrogate_str, char, codepoint, std.zig.fmtEscapes(utf8) },
                 );
-                global.terminal.addInput(utf8);
-                win32.invalidateHwnd(hwnd);
+                const state = stateFromHwnd(hwnd);
+                const pty = state.child_process.pty orelse {
+                    state.reportError("pty closed", .{});
+                    return 0;
+                };
+                pty.writer().writeAll(utf8) catch |e| {
+                    state.reportError(
+                        "write to child process failed with {s}",
+                        .{@errorName(e)},
+                    );
+                    return 0;
+                };
                 return 0;
             },
         },
-        wmapp.CHILD_PROCESS_DATA => {
+        WM_APP_CHILD_PROCESS_DATA => {
             const buffer: [*]const u8 = @ptrFromInt(wparam);
             const len: usize = @bitCast(lparam);
             std.debug.assert(len > 0);
-            global.terminal.onChildProcessData(hwnd, buffer[0..len]);
+            const state = stateFromHwnd(hwnd);
+            global.terminal.handleChildProcessOutput(hwnd, &state.screen, buffer[0..len]);
             if (global.terminal.dirty)
                 win32.invalidateHwnd(hwnd);
-            return wmapp.CHILD_PROCESS_DATA_RESULT;
+            return WM_APP_CHILD_PROCESS_DATA_RESULT;
         },
         else => return win32.DefWindowProcW(hwnd, msg, wparam, lparam),
     }

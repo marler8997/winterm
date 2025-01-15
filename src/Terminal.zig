@@ -6,11 +6,11 @@ const ghostty = struct {
     const terminal = @import("ghostty_terminal");
 };
 const Error = @import("Error.zig");
+const GridPos = @import("GridPos.zig");
 const main = @import("main.zig");
 const PagedMem = @import("pagedmem.zig").PagedMem;
 const render = @import("d3d11.zig");
 const Screen = @import("Screen.zig");
-const wmapp = @import("wmapp.zig");
 const XY = @import("xy.zig").XY;
 
 const vtlog = std.log.scoped(.vt);
@@ -22,122 +22,127 @@ cursor_dirty: bool = true,
 high_surrogate: ?u16 = null,
 input: PagedMem(std.mem.page_size) = .{},
 buffer: PagedMem(std.mem.page_size) = .{},
-cursor: struct { row: u16, col: u16 } = .{ .row = 0, .col = 0 },
+cursor: GridPos = .{ .row = 0, .col = 0 },
 scroll_pos: usize = 0,
 cursor_visible: bool = true,
+parser: ghostty.terminal.Parser = .{},
 
-child_process: ?ChildProcess = null,
-
-const ChildProcess = struct {
-    pty: ?Pty,
-    read: win32.HANDLE,
-    thread: std.Thread,
-    job: win32.HANDLE,
-    process_handle: win32.HANDLE,
-    parser: ghostty.terminal.Parser,
-};
-const Pty = struct {
-    write: win32.HANDLE,
-    hpcon: win32.HPCON,
-    pub fn deinit(self: *Pty) void {
-        win32.ClosePseudoConsole(self.hpcon);
-        win32.closeHandle(self.write);
-    }
-    pub fn writer(self: Pty) FileWriter {
-        return .{ .context = self.write };
-    }
-};
-
-const FileWriter = std.io.Writer(
-    win32.HANDLE,
-    std.os.windows.WriteFileError,
-    writeFile,
-);
-fn writeFile(handle: win32.HANDLE, bytes: []const u8) std.os.windows.WriteFileError!usize {
-    return try std.os.windows.WriteFile(handle, bytes, null);
+fn nextTop(row_count: u16, top: u16) u16 {
+    std.debug.assert(top < row_count);
+    return if (top == row_count - 1) 0 else top + 1;
 }
 
-// this must be called before calling joinChildProcess
-pub fn closePty(self: *Terminal, process_handle: win32.HANDLE) void {
-    const child_process = &(self.child_process.?);
-    std.debug.assert(child_process.process_handle == process_handle);
-
-    if (child_process.pty) |*pty| {
-        pty.deinit();
-        child_process.pty = null;
-    }
+fn cellIndexFromRow(cell_count: GridPos, top: u16, row: u16) usize {
+    std.debug.assert(row < cell_count.row);
+    const row_index = blk: {
+        const i = @as(usize, top) + @as(usize, row);
+        break :blk i - (if (i >= cell_count.row) cell_count.row else 0);
+    };
+    return @as(usize, row_index) * @as(usize, cell_count.col);
 }
 
-// closePty must be called before calling this method, and after closePty, the
-// main thread must flush the MessageQueue to unblock the read thread in case it
-// is blocking on SendMessage.
-pub fn joinChildProcess(self: *Terminal, process_handle: win32.HANDLE) void {
-    const child_process = &(self.child_process.?);
-    std.debug.assert(child_process.process_handle == process_handle);
-    // pty should have already been closed by closePty
-    std.debug.assert(child_process.pty == null);
-    win32.closeHandle(child_process.process_handle);
-    win32.closeHandle(child_process.job);
-    child_process.thread.join();
-    win32.closeHandle(child_process.read);
-    self.child_process.? = undefined;
-    self.child_process = null;
+fn cellIndexFromPos(cell_count: GridPos, top: u16, pos: GridPos) usize {
+    std.debug.assert(pos.col < cell_count.col);
+    return cellIndexFromRow(cell_count, top, pos.row) + pos.col;
 }
 
 fn isUtf8Extension(c: u8) bool {
     return (c & 0b1100_0000) == 0b1000_0000;
 }
 
-pub fn onChildProcessData(self: *Terminal, hwnd: win32.HWND, data: []const u8) void {
+fn saveCellsToBuffer(self: *Terminal, cells: []const Screen.Cell) void {
+    _ = self;
+    _ = cells;
+    std.log.info("todo: save cells to buffer (maybe we make this configurable?)", .{});
+}
+
+pub fn handleChildProcessOutput(self: *Terminal, hwnd: win32.HWND, screen: *Screen, data: []const u8) void {
     std.debug.assert(data.len > 0);
-    const child_process = &(self.child_process orelse std.debug.panic(
-        "got child process data without a child process: {}",
-        .{std.zig.fmtEscapes(data)},
-    ));
     for (data) |c| {
-        const actions = child_process.parser.next(c);
+        const actions = self.parser.next(c);
         for (actions) |maybe_action| {
-            if (maybe_action) |a| self.doAction(hwnd, a);
+            if (maybe_action) |a| self.doAction(hwnd, screen, a);
         }
     }
 }
 
-fn doAction(self: *Terminal, hwnd: win32.HWND, action: ghostty.terminal.Parser.Action) void {
+fn doAction(
+    self: *Terminal,
+    hwnd: win32.HWND,
+    screen: *Screen,
+    action: ghostty.terminal.Parser.Action,
+) void {
+    std.debug.assert(screen.top < screen.row_count);
+    std.debug.assert(self.cursor.col < screen.col_count);
+    std.debug.assert(self.cursor.row < screen.row_count);
+
     switch (action) {
         .print => |codepoint| {
+            screen.cells[cellIndexFromPos(screen.cellCount(), screen.top, self.cursor)] = .{
+                .codepoint = codepoint,
+                .background = 0,
+                .foreground = 0xffffffff,
+            };
+            const next_col = self.cursor.col + 1;
+            if (next_col == screen.col_count) {
+                @panic("todo");
+            } else {
+                self.cursor.col = next_col;
+                // just assuming this for now
+                self.dirty = true;
+            }
             var utf8_buf: [7]u8 = undefined;
-            const utf8_len: u3 = std.unicode.utf8Encode(
-                codepoint,
-                &utf8_buf,
-            ) catch |e| std.debug.panic(
-                "todo: handle invalid codepoint {} (0x{0x}) ({s})",
-                .{ codepoint, @errorName(e) },
+            const utf8_len: u3 = blk: {
+                break :blk std.unicode.utf8Encode(
+                    codepoint,
+                    &utf8_buf,
+                ) catch {
+                    utf8_buf[0] = '?';
+                    utf8_buf[1] = '?';
+                    break :blk 2;
+                };
+            };
+            const utf8 = utf8_buf[0..utf8_len];
+            // self.bufferPrint("{s}", .{utf8_buf[0..utf8_len]});
+            vtlog.debug(
+                "print \"{s}\" {} 0x{1x}: cursor now at row={} col={}",
+                .{ utf8, codepoint, self.cursor.row, self.cursor.col },
             );
-            self.bufferPrint("{s}", .{utf8_buf[0..utf8_len]});
         },
         .execute => |control_code| switch (control_code) {
             // '\b' => {},
             '\n' => {
-                @panic("TODO: handle \\n control code");
-                // while (self.cursor < self.buffer.len) {
-                //     if (self.buffer.getByte(self.cursor) == '\n') {
-                //         self.cursor += 1;
-                //         return;
-                //     }
-                //     self.cursor += 1;
-                // }
-                // self.bufferPrint("\n", .{});
+                if (self.cursor.row + 1 == screen.row_count) {
+                    const new_top = nextTop(screen.row_count, screen.top);
+                    const cell_start = cellIndexFromPos(
+                        screen.cellCount(),
+                        screen.top,
+                        .{ .row = screen.top, .col = 0 },
+                    );
+                    self.saveCellsToBuffer(screen.cells[cell_start..][0..screen.col_count]);
+                    self.cursor = .{ .row = screen.top, .col = 0 };
+                    screen.top = new_top;
+                    self.dirty = true;
+                } else {
+                    const new_cursor: GridPos = .{ .row = self.cursor.row + 1, .col = 0 };
+                    vtlog.debug("\\n new row={}", .{new_cursor.row});
+                    self.cursor = new_cursor;
+                    self.cursor_dirty = true;
+                }
             },
             '\r' => {
-                @panic("TODO: handle \\r control code");
-                //self.cursor = self.buffer.scanBackwardsScalar(self.cursor, '\n');
+                const new_cursor: GridPos = .{ .row = self.cursor.row, .col = 0 };
+                const moved = !new_cursor.eql(self.cursor);
+                vtlog.debug("\\r ({s})", .{if (moved) "moved" else "already there"});
+                self.cursor = new_cursor;
+                self.cursor_dirty = moved;
             },
             else => std.log.err(
                 "todo: handle control code {} (0x{0x}) \"{}\"",
                 .{ control_code, std.zig.fmtEscapes(&[_]u8{control_code}) },
             ),
         },
-        .csi_dispatch => |csi| self.handleCsiDispatch(csi) catch |e| {
+        .csi_dispatch => |csi| self.handleCsiDispatch(screen, csi) catch |e| {
             std.log.err("failed to handle csi dispatch {} with {s}", .{ csi, @errorName(e) });
         },
         // .esc_dispatch
@@ -148,7 +153,7 @@ fn doAction(self: *Terminal, hwnd: win32.HWND, action: ghostty.terminal.Parser.A
     }
 }
 
-fn handleCsiDispatch(self: *Terminal, csi: ghostty.terminal.Parser.Action.CSI) !void {
+fn handleCsiDispatch(self: *Terminal, screen: *Screen, csi: ghostty.terminal.Parser.Action.CSI) !void {
     switch (csi.final) {
         'H' => {
             if (csi.intermediates.len > 0) return error.UnexpectedIntermediates;
@@ -196,31 +201,64 @@ fn handleCsiDispatch(self: *Terminal, csi: ghostty.terminal.Parser.Action.CSI) !
                 },
             }
         },
+        'K' => {
+            if (csi.intermediates.len > 0) return error.UnexpectedIntermediates;
+            switch (csi.params.len) {
+                0 => {
+                    const index = cellIndexFromPos(screen.cellCount(), screen.top, self.cursor);
+                    vtlog.debug("erase line from {} to {}", .{ self.cursor.col, screen.col_count });
+                    for (self.cursor.col..screen.col_count, 0..) |_, offset| {
+                        screen.cells[index + offset] = .{
+                            .codepoint = null,
+                            .background = 0,
+                            .foreground = 0,
+                        };
+                    }
+                },
+                else => return error.Todo,
+            }
+        },
         'X' => {
             if (csi.intermediates.len > 0) return error.UnexpectedIntermediates;
             if (csi.params.len != 1) return error.UnexpectedParams;
-            // for (0 .. csi.param) |p| {
-            //     std.log.info("here: params is {d}", .{csi.params});
-            // }
-            return error.Todo;
+            for (0..csi.params[0]) |_| {
+                screen.cells[cellIndexFromPos(screen.cellCount(), screen.top, self.cursor)] = .{
+                    .codepoint = null,
+                    .background = 0,
+                    .foreground = 0,
+                };
+                self.cursor.col += 1;
+            }
         },
-        'l' => {
+        'h' => {
             if (!std.mem.eql(u8, &.{'?'}, csi.intermediates)) return error.UnexpectedIntermediates;
             if (std.mem.eql(u16, &.{25}, csi.params)) {
-                vtlog.debug(
-                    "cursor hide ({s} hidden)",
-                    .{if (self.cursor_visible) "newly" else "already"},
-                );
-                if (self.cursor_visible) {
-                    self.cursor_visible = false;
-                    self.cursor_dirty = true;
-                }
+                self.setCursorVisible(true);
                 return;
             }
-            if (csi.params.len != 0) return error.TodoParams;
+            return error.TodoParams;
+        },
+        'l' => {
+            // cmd.exe will send "\x1b[25l" even thoug it says it will send "\x1b[?25l"
+            if (csi.intermediates.len != 0 and !std.mem.eql(u8, &.{'?'}, csi.intermediates)) return error.UnexpectedIntermediates;
+            if (std.mem.eql(u16, &.{25}, csi.params)) {
+                self.setCursorVisible(false);
+                return;
+            }
+            return error.TodoParams;
         },
         else => return error.Todo,
     }
+}
+
+fn setCursorVisible(self: *Terminal, visible: bool) void {
+    const changed = (self.cursor_visible != visible);
+    vtlog.debug(
+        "cursor visible: {} ({s})",
+        .{ visible, if (changed) "changed" else "no change" },
+    );
+    self.cursor_visible = visible;
+    self.cursor_dirty = changed;
 }
 
 fn handleOscDispatch(self: *Terminal, hwnd: win32.HWND, osc: ghostty.terminal.osc.Command) !void {
@@ -249,108 +287,152 @@ fn handleOscDispatch(self: *Terminal, hwnd: win32.HWND, osc: ghostty.terminal.os
     }
 }
 
-pub fn updateColRowCounts(self: *Terminal, col_count: u16, row_count: u16) void {
-    self.dirty = true;
-    const child_process = self.child_process orelse return;
-    const pty = child_process.pty orelse return;
-    const hr = win32.ResizePseudoConsole(
-        pty.hpcon,
-        .{ .X = @intCast(col_count), .Y = @intCast(row_count) },
-    );
-    if (hr < 0) fatalHr("ResizePseudoConsole", hr);
-}
-
-// pub fn backspace(self: *Terminal) bool {
+// pub fn backspace(self: *Terminal) void {
 //     if (self.child_process) |child_process| {
 //         const pty = child_process.pty orelse return self.appendError("pty closed", .{});
-//         return pty.writer().writeAll
+//         pty.writer().writeAll("\x7f") catch |e| {
+//             self.appendError(
+//                 "write backspace failed with {s}",
+//                 .{@errorName(e)},
+//             );
+//         };
+//         return;
 //     }
-//     if (self.input.len == 0) return false;
-//     if (self.input.getByte(self.input.len - 1) == '\n') return false;
-//     var new_len: usize = self.input.len;
-//     while (true) {
-//         new_len -= 1;
-//         if (!isUtf8Extension(self.input.getByte(new_len)))
-//             break;
-//         if (new_len == 0) break;
-//     }
-//     const modified = (new_len != self.input.len);
-//     self.dirty = self.dirty or modified;
-//     self.input.len = new_len;
-//     return modified;
+
+//     @panic("todo");
+//     // if (self.input.len == 0) return;
+//     // if (self.input.getByte(self.input.len - 1) == '\n') return false;
+//     // var new_len: usize = self.input.len;
+//     // while (true) {
+//     //     new_len -= 1;
+//     //     if (!isUtf8Extension(self.input.getByte(new_len)))
+//     //         break;
+//     //     if (new_len == 0) break;
+//     // }
+//     // const modified = (new_len != self.input.len);
+//     // self.dirty = self.dirty or modified;
+//     // self.input.len = new_len;
+//     // return modified;
 // }
 
 pub const Key = enum {
     // zig fmt: off
     up, down, right, left,
     // zig fmt: on
-};
-pub fn keyDown(self: *Terminal, key: Key) void {
-    if (self.child_process) |child_process| {
-        const pty = child_process.pty orelse {
-            std.log.info("can't send key {s}, pty closed", .{@tagName(key)});
-            return;
-        };
-        const seq: []const u8 = switch (key) {
+    pub fn escapeSequence(self: Key) [:0]const u8 {
+        return switch (self) {
             .up => "\x1b[A",
             .down => "\x1b[B",
             .left => "\x1b[D",
             .right => "\x1b[C",
         };
-        pty.writer().writeAll(seq) catch |e| std.debug.panic(
-            "todo: handle pty write error {s}",
-            .{@errorName(e)},
-        );
-        return;
     }
-    std.log.err("TODO: handle keydown '{s}' with no child process", .{@tagName(key)});
-}
+};
 
-pub fn addInput(self: *Terminal, utf8: []const u8) void {
-    std.debug.assert(utf8.len > 0);
-    if (self.child_process) |child_process| {
-        const pty = child_process.pty orelse return self.appendError("pty closed", .{});
-        return pty.writer().writeAll(utf8) catch |e| self.appendError(
-            "write failed with {s}",
-            .{@errorName(e)},
-        );
-    }
+// pub fn addInput(self: *Terminal, utf8: []const u8) void {
+//     std.debug.assert(utf8.len > 0);
+//     if (self.child_process) |child_process| {
+//         const pty = child_process.pty orelse return self.appendError("pty closed", .{});
+//         return pty.writer().writeAll(utf8) catch |e| self.appendError(
+//             "write failed with {s}",
+//             .{@errorName(e)},
+//         );
+//     }
 
-    var copied: usize = 0;
-    while (copied < utf8.len) {
-        const read_buf = self.input.getReadBuf() catch |e| oom(e);
-        std.debug.assert(read_buf.len > 0);
-        const copy_len = @min(utf8.len - copied, read_buf.len);
-        @memcpy(read_buf[0..copy_len], utf8[copied..][0..copy_len]);
-        copied += copy_len;
-        self.input.finishRead(copy_len);
-    }
-    // we'll just assume this is true for now
-    self.dirty = true;
-}
+//     var copied: usize = 0;
+//     while (copied < utf8.len) {
+//         const read_buf = self.input.getReadBuf() catch |e| oom(e);
+//         std.debug.assert(read_buf.len > 0);
+//         const copy_len = @min(utf8.len - copied, read_buf.len);
+//         @memcpy(read_buf[0..copy_len], utf8[copied..][0..copy_len]);
+//         copied += copy_len;
+//         self.input.finishRead(copy_len);
+//     }
+//     // we'll just assume this is true for now
+//     self.dirty = true;
+// }
 
 fn bufferPrint(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
-    if (self.cursor.row != 0) std.debug.panic("todo: print to row {}", .{self.cursor.row});
-    if (self.cursor.col != 0) std.debug.panic("todo: print to col {}", .{self.cursor.col});
+    _ = self;
+    _ = fmt;
+    _ = args;
+    std.log.info("TODO: buffer print", .{});
+    // const row_offset: usize = blk_row_offset: {
+    //     var buffer_it = CodepointIterator{
+    //         .slice = self.buffer.sliceAll(),
+    //         .index = self.scroll_pos,
+    //     };
+    //     const rows_passed = blk_rows_passed: {
+    //         for (0..self.cursor.row) |i| {
+    //             while (true) {
+    //                 const c = buffer_it.next() orelse break :blk_rows_passed i;
+    //                 if (c == '\n') break;
+    //             }
+    //         }
+    //         break :blk_rows_passed self.cursor.row;
+    //     };
+    //     if (rows_passed < self.cursor.row) {
+    //         std.debug.assert(buffer_it.index == self.buffer.len);
+    //         const len = self.cursor.row - rows_passed;
+    //         for (0..len) |_| {
+    //             self.buffer.writer().writeByte('\n') catch |e| oom(e);
+    //         }
+    //         buffer_it.index += len;
+    //     }
+    //     break :blk_row_offset buffer_it.index;
+    // };
 
-    if (self.scroll_pos != self.buffer.len) @panic("todo");
-    if (true) {
-        std.io.getStdErr().writer().print("PRINTING scroll={} buffer_len={} cursor={}:\n---\n", .{
-            self.scroll_pos,
-            self.buffer.len,
-            self.cursor,
-        }) catch unreachable;
-        std.io.getStdErr().writer().print(fmt, args) catch unreachable;
-        std.io.getStdErr().writer().print("\n---\n", .{}) catch unreachable;
-    }
-    self.buffer.writer().print(fmt, args) catch |e| oom(e);
-    if (true) @panic("todo: wrap?");
-    if (true) @panic("todo: auto scroll?");
-    // if (cursor_at_end) {
-    //     self.cursor = self.buffer.len;
+    // const buffer_offset: usize = blk: {
+    //     var buffer_it = CodepointIterator{
+    //         .slice = self.buffer.sliceAll(),
+    //         .index = row_offset,
+    //     };
+    //     for (0..self.cursor.col) |_| {
+    //         const c = buffer_it.next() orelse @panic("todo");
+    //         if (c == '\n') @panic("todo");
+    //     }
+    //     break :blk buffer_it.index;
+    // };
+
+    // if (false) {
+    //     std.io.getStdErr().writer().print(
+    //         "PRINTING scroll={} buffer_len={} cursor row={} col={} row_offset={} buffer_offset={}:\n---\n",
+    //         .{
+    //             self.scroll_pos,
+    //             self.buffer.len,
+    //             self.cursor.row,
+    //             self.cursor.col,
+    //             row_offset,
+    //             buffer_offset,
+    //         },
+    //     ) catch unreachable;
+    //     std.io.getStdErr().writer().print(fmt, args) catch unreachable;
+    //     std.io.getStdErr().writer().print("\n---\n", .{}) catch unreachable;
     // }
-    // TODO: only mark the terminal as dirty if the new data is in view
-    self.dirty = true;
+
+    // if (buffer_offset == self.buffer.len) {
+    //     const len_before = self.buffer.len;
+    //     self.buffer.writer().print(fmt, args) catch |e| oom(e);
+    //     if (len_before == self.buffer.len) {
+    //         return;
+    //     }
+
+    //     {
+    //         var buffer_it = CodepointIterator{
+    //             .slice = self.buffer.sliceAll(),
+    //             .index = len_before,
+    //         };
+    //         while (buffer_it.next()) |c| {
+    //             if (c == '\n') @panic("todo");
+    //             self.cursor.col += 1;
+    //         }
+    //     }
+    // } else {
+    //     @panic("todo");
+    // }
+
+    // // TODO: only mark the terminal as dirty if the new data is in view
+    // self.dirty = true;
 }
 
 fn appendError(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
@@ -360,324 +442,42 @@ fn appendError(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     self.bufferPrint("error: " ++ fmt ++ "\n", args);
 }
 
-pub fn flushInput(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16) void {
-    var err: Error = undefined;
-    self.flushInput2(hwnd, col_count, row_count, &err) catch {
-        self.appendError("{}", .{err});
-    };
-}
+// pub fn flushInput(self: *Terminal, hwnd: win32.HWND, col_count: u16, row_count: u16) void {
+//     var err: Error = undefined;
+//     self.flushInput2(hwnd, col_count, row_count, &err) catch {
+//         self.appendError("{}", .{err});
+//     };
+// }
 
-fn flushInput2(
-    self: *Terminal,
-    hwnd: win32.HWND,
-    col_count: u16,
-    row_count: u16,
-    out_err: *Error,
-) error{Error}!void {
-    const command_start = self.input.scanBackwardsScalar(self.input.len, '\n');
+// fn flushInput2(
+//     self: *Terminal,
+//     hwnd: win32.HWND,
+//     col_count: u16,
+//     row_count: u16,
+//     out_err: *Error,
+// ) error{Error}!void {
+//     const command_start = self.input.scanBackwardsScalar(self.input.len, '\n');
 
-    if (self.child_process) |child_process| {
-        self.input.writer().writeAll("\r\n") catch |e| oom(e);
-        self.dirty = true;
-        const pty = child_process.pty orelse {
-            self.appendError("pty closed", .{});
-            return;
-        };
-        // TODO: coalesce this into bigger writes?
-        var next: usize = command_start;
-        while (next < self.input.len) : (next += 1) {
-            pty.writer().writeByte(
-                self.input.getByte(next),
-            ) catch |e| return self.appendError("WriteToPty failed with {s}", .{@errorName(e)});
-        }
-        return;
-    }
+//     if (self.child_process) |child_process| {
+//         self.input.writer().writeAll("\r\n") catch |e| oom(e);
+//         self.dirty = true;
+//         const pty = child_process.pty orelse {
+//             self.appendError("pty closed", .{});
+//             return;
+//         };
+//         // TODO: coalesce this into bigger writes?
+//         var next: usize = command_start;
+//         while (next < self.input.len) : (next += 1) {
+//             pty.writer().writeByte(
+//                 self.input.getByte(next),
+//             ) catch |e| return self.appendError("WriteToPty failed with {s}", .{@errorName(e)});
+//         }
+//         return;
+//     }
 
-    const command_limit = self.input.len;
-    if (command_start == command_limit) {
-        // beep?
-        // show a temporary error message?
-        std.log.info("no command to execute", .{});
-        return;
-    }
-    self.input.writeByte('\n') catch |e| oom(e);
-    self.dirty = true;
-
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const command_utf16: [:0]u16 = blk: {
-        var al: std.ArrayListUnmanaged(u16) = .{};
-        defer al.deinit(arena.allocator());
-        var it = Wtf16Iterator{
-            .slice = self.input.sliceTo(command_limit),
-            .index = command_start,
-        };
-        if (self.buffer.len > 0 and self.buffer.lastByte() != '\n') {
-            self.bufferPrint("\n", .{});
-        }
-        self.bufferPrint("> ", .{});
-        while (true) {
-            const save_pos = it.index;
-            const entry = it.next() orelse break;
-            for (save_pos..it.index) |i| {
-                self.bufferPrint("{s}", .{[_]u8{self.input.getByte(i)}});
-            }
-            const value = entry.value orelse return out_err.setZig("DecodeCommand", error.InvalidUtf8);
-            al.append(arena.allocator(), value) catch |e| oom(e);
-        }
-        self.bufferPrint("\n", .{});
-        break :blk al.toOwnedSliceSentinel(arena.allocator(), 0) catch |e| oom(e);
-    };
-
-    const command_stripped = std.mem.trim(u16, command_utf16, &[_]u16{ ' ', '\t', '\r' });
-    if (std.mem.eql(u16, command_stripped, win32.L("exit"))) {
-        win32.PostQuitMessage(0);
-        return;
-    }
-    if (std.mem.eql(u16, command_stripped, win32.L("test"))) {
-        for (0..20) |i| {
-            self.bufferPrint(
-                "Winterm is comming ({})...\n",
-                .{i},
-            );
-        }
-        return;
-    }
-
-    var pty_handles_closed = false;
-
-    var sec_attr: win32.SECURITY_ATTRIBUTES = .{
-        .nLength = @sizeOf(win32.SECURITY_ATTRIBUTES),
-        .bInheritHandle = 1,
-        .lpSecurityDescriptor = null,
-    };
-
-    var pty_read: win32.HANDLE = undefined;
-    var our_write: win32.HANDLE = undefined;
-    if (0 == win32.CreatePipe(@ptrCast(&pty_read), @ptrCast(&our_write), &sec_attr, 0)) return out_err.setWin32(
-        "CreateInputPipe",
-        win32.GetLastError(),
-    );
-    defer if (!pty_handles_closed) win32.closeHandle(pty_read);
-    errdefer win32.closeHandle(our_write);
-
-    var our_read: win32.HANDLE = undefined;
-    var pty_write: win32.HANDLE = undefined;
-    if (0 == win32.CreatePipe(@ptrCast(&our_read), @ptrCast(&pty_write), &sec_attr, 0)) return out_err.setWin32(
-        "CreateOutputPipe",
-        win32.GetLastError(),
-    );
-
-    try setInherit(out_err, our_write, false);
-    try setInherit(out_err, our_read, false);
-
-    // start the thread before creating the console since
-    // closing the console is what could cause the thread to stop
-    const thread = std.Thread.spawn(
-        .{},
-        readConsoleThread,
-        .{ hwnd, our_read },
-    ) catch |e| return out_err.setZig("CreateReadConsoleThread", e);
-    errdefer thread.join();
-
-    var hpcon: win32.HPCON = undefined;
-    {
-        const hr = win32.CreatePseudoConsole(
-            .{ .X = @intCast(col_count), .Y = @intCast(row_count) },
-            pty_read,
-            pty_write,
-            0,
-            @ptrCast(&hpcon),
-        );
-        // important to close these here so our thread won't get stuck
-        // if CreatePseudoConsole fails
-        win32.closeHandle(pty_read);
-        win32.closeHandle(pty_write);
-        pty_handles_closed = true;
-        if (hr < 0) return out_err.setHresult("CreatePseudoConsole", hr);
-    }
-    errdefer win32.ClosePseudoConsole(hpcon);
-
-    var attr_list_size: usize = undefined;
-    std.debug.assert(0 == win32.InitializeProcThreadAttributeList(null, 1, 0, &attr_list_size));
-    switch (win32.GetLastError()) {
-        win32.ERROR_INSUFFICIENT_BUFFER => {},
-        else => return out_err.setWin32("GetProcAttrsSize", win32.GetLastError()),
-    }
-    const attr_list = arena.allocator().alloc(
-        u8,
-        attr_list_size,
-    ) catch return out_err.setZig("AllocProcAttrs", error.OutOfMemory);
-    // no need to free, the arena will free it for us
-    var second_attr_list_size: usize = attr_list_size;
-    if (0 == win32.InitializeProcThreadAttributeList(
-        attr_list.ptr,
-        1,
-        0,
-        &second_attr_list_size,
-    )) return out_err.setWin32("InitProcAttrs", win32.GetLastError());
-    defer win32.DeleteProcThreadAttributeList(attr_list.ptr);
-    std.debug.assert(second_attr_list_size == attr_list_size);
-    if (0 == win32.UpdateProcThreadAttribute(
-        attr_list.ptr,
-        0,
-        win32.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-        hpcon,
-        @sizeOf(@TypeOf(hpcon)),
-        null,
-        null,
-    )) return out_err.setWin32("UpdateProcThreadAttribute", win32.GetLastError());
-
-    var startup_info = win32.STARTUPINFOEXW{
-        .StartupInfo = .{
-            .cb = @sizeOf(win32.STARTUPINFOEXW),
-            .hStdError = null,
-            .hStdOutput = null,
-            .hStdInput = null,
-            // USESTDHANDLES is important, otherwise the child process can
-            // inherit our handles and end up having IO hooked up to one of
-            // our ancestor processes instead of our pseudo terminal. Setting
-            // the actual handle values to null seems to work in that the child
-            // process will be hooked up to the PTY.
-            .dwFlags = .{ .USESTDHANDLES = 1 },
-            .lpReserved = null,
-            .lpDesktop = null,
-            .lpTitle = null,
-            .dwX = 0,
-            .dwY = 0,
-            .dwXSize = 0,
-            .dwYSize = 0,
-            .dwXCountChars = 0,
-            .dwYCountChars = 0,
-            .dwFillAttribute = 0,
-            .wShowWindow = 0,
-            .cbReserved2 = 0,
-            .lpReserved2 = null,
-        },
-        .lpAttributeList = attr_list.ptr,
-    };
-    var process_info: win32.PROCESS_INFORMATION = undefined;
-    if (0 == win32.CreateProcessW(
-        null,
-        command_utf16,
-        null,
-        null,
-        0, // inherit handles
-        .{
-            .CREATE_SUSPENDED = 1,
-            // Adding this causes output not to work?
-            //.CREATE_NO_WINDOW = 1,
-            .EXTENDED_STARTUPINFO_PRESENT = 1,
-        },
-        null,
-        null,
-        &startup_info.StartupInfo,
-        &process_info,
-    )) return out_err.setWin32("CreateProcess", win32.GetLastError());
-    defer win32.closeHandle(process_info.hThread.?);
-    errdefer win32.closeHandle(process_info.hProcess.?);
-
-    // The job object allows us to automatically kill our child process
-    // if our process dies.
-    // TODO: should we cache/reuse this?
-    const job = win32.CreateJobObjectW(null, null) orelse return out_err.setWin32(
-        "CreateJobObject",
-        win32.GetLastError(),
-    );
-    errdefer win32.closeHandle(job);
-
-    {
-        var info = std.mem.zeroes(win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION);
-        info.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if (0 == win32.SetInformationJobObject(
-            job,
-            win32.JobObjectExtendedLimitInformation,
-            &info,
-            @sizeOf(@TypeOf(info)),
-        )) return out_err.setWin32(
-            "SetInformationJobObject",
-            win32.GetLastError(),
-        );
-    }
-
-    if (0 == win32.AssignProcessToJobObject(
-        job,
-        process_info.hProcess,
-    )) return out_err.setWin32(
-        "AssignProcessToJobObject",
-        win32.GetLastError(),
-    );
-
-    {
-        const suspend_count = win32.ResumeThread(process_info.hThread);
-        if (suspend_count == -1) return out_err.setWin32(.{
-            "ResumeThread",
-            win32.GetLastError(),
-        });
-    }
-
-    self.child_process = .{
-        .pty = .{
-            .write = our_write,
-            .hpcon = hpcon,
-        },
-        .read = our_read,
-        .thread = thread,
-        .job = job,
-        .process_handle = process_info.hProcess.?,
-        .parser = .{},
-    };
-}
-
-fn readConsoleThread(
-    hwnd: win32.HWND,
-    read: win32.HANDLE,
-) void {
-    while (true) {
-        var buffer: [std.mem.page_size]u8 = undefined;
-        var read_len: u32 = undefined;
-        if (0 == win32.ReadFile(
-            read,
-            &buffer,
-            buffer.len,
-            &read_len,
-            null,
-        )) switch (win32.GetLastError()) {
-            .ERROR_BROKEN_PIPE => {
-                std.log.info("console output closed", .{});
-                return;
-            },
-            .ERROR_HANDLE_EOF => {
-                @panic("todo: eof");
-            },
-            .ERROR_NO_DATA => {
-                @panic("todo: nodata");
-            },
-            else => |e| std.debug.panic("todo: handle error {}", .{e.fmt()}),
-        };
-        if (read_len == 0) {
-            @panic("possible for ReadFile to return 0 bytes?");
-        }
-        std.debug.assert(wmapp.CHILD_PROCESS_DATA_RESULT == win32.SendMessageW(
-            hwnd,
-            wmapp.CHILD_PROCESS_DATA,
-            @intFromPtr(&buffer),
-            read_len,
-        ));
-    }
-}
-
-fn setInherit(out_err: *Error, handle: win32.HANDLE, enable: bool) error{Error}!void {
-    if (0 == win32.SetHandleInformation(
-        handle,
-        @bitCast(win32.HANDLE_FLAGS{ .INHERIT = 1 }),
-        .{ .INHERIT = if (enable) 1 else 0 },
-    )) return out_err.setWin32(
-        "SetHandleInformation",
-        win32.GetLastError(),
-    );
-}
+//     // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+//     @panic("here");
+// }
 
 const Wtf16Iterator = struct {
     slice: PagedMem(std.mem.page_size).Slice,
@@ -736,7 +536,21 @@ fn countCodepoints(
     return count;
 }
 
-pub fn update(self: *Terminal, screen: *const Screen) void {
+// pub fn updateScreen(self: *Terminal, screen: *const Screen) void {
+//     _ = self;
+//     _ = screen;
+
+//     if (screen.top != 0) @panic("todo");
+
+//     for (0..screen.row_count) |row| {
+
+//     }
+
+//     std.log.err("TODO: implement updateScreen", .{});
+//     //@panic("todo");
+// }
+
+fn updateTodo(self: *Terminal, screen: *const Screen) void {
     if (!self.dirty) return;
     defer self.dirty = false;
 
@@ -794,15 +608,19 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
                     }
                     break :blk ' ';
                 };
-                const bg = render.Color.initRgba(0, 0, 0, 0);
-                const fg = render.Color.initRgb(255, 255, 255);
-
+                const Rgb = struct { r: u8, g: u8, b: u8 };
+                const normal_bg: Rgb = .{ .r = 0, .g = 0, .b = 0 };
+                const normal_fg: Rgb = .{ .r = 255, .g = 255, .b = 255 };
                 const at_cursor = (self.cursor.row == row_index and self.cursor.col == col_index);
                 const render_cursor = (at_cursor and self.cursor_visible);
+
+                const cell_bg: Rgb = if (render_cursor) normal_fg else normal_bg;
+                const cell_fg: Rgb = if (render_cursor) normal_bg else normal_fg;
+
                 cell.* = .{
                     .codepoint = codepoint,
-                    .background = if (render_cursor) fg else bg,
-                    .foreground = if (render_cursor) bg else fg,
+                    .background = render.Color.initRgba(cell_bg.r, cell_bg.g, cell_bg.b, 0),
+                    .foreground = render.Color.initRgba(cell_fg.r, cell_fg.g, cell_fg.b, 255),
                 };
             }
         } else {

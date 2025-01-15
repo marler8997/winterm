@@ -2,13 +2,83 @@ const std = @import("std");
 const win32 = @import("win32").everything;
 
 pub fn main() !void {
-    std.log.info("here", .{});
-    try std.io.getStdOut().writer().writeAll("TestAppStdout\n");
-    try std.io.getStdErr().writer().writeAll("TestAppStderr\n");
-    try std.io.getStdOut().writer().writeAll("FOO: this line should start with BAR not FOO\rBAR\n");
-    try std.io.getStdOut().writer().writeAll("BAR: this line should start with FOO not BAR\rFOO\n");
-    const clear_screen = "\x1b[2J";
-    try std.io.getStdOut().writer().writeAll(clear_screen);
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+    if (false) {
+        try stdout.writeAll("TestAppStdout\n");
+        try stderr.writeAll("TestAppStderr\n");
+        try stdout.writeAll("FOO: this line should start with BAR not FOO\rBAR\n");
+        try stdout.writeAll("BAR: this line should start with FOO not BAR\rFOO\n");
+        const clear_screen = "\x1b[2J";
+        try stdout.writeAll(clear_screen);
+    }
+
+    // test large scrollback
+    if (false) {
+        for (0..100) |i| {
+            try stdout.print("Line {d} of original output\n", .{i});
+        }
+
+        // Save cursor position
+        try stdout.writeAll("\x1b[s");
+
+        // Move cursor to top of screen
+        try stdout.writeAll("\x1b[H");
+
+        // Insert some new content at the beginning
+        try stdout.writeAll("\x1b[31m"); // Red text
+        try stdout.writeAll("=== INSERTED AT TOP ===\n");
+        try stdout.writeAll("This content was added after the initial output\n");
+        try stdout.writeAll("Notice how we can manipulate the terminal buffer\n");
+        try stdout.writeAll("=== END INSERTED CONTENT ===\n");
+        try stdout.writeAll("\x1b[0m"); // Reset color
+
+        // Restore cursor position
+        try stdout.writeAll("\x1b[u");
+
+        // Add something at the end to show we returned
+        try stdout.writeAll("\nBack at the bottom!\n");
+    }
+    if (false) {
+        for (0..1000) |_| {
+            try stdout.writeAll("\x1b[10000A"); // Try to move up 10000 lines
+        }
+    }
+    if (false) {
+        for (0..400) |i| {
+            try stdout.print("Line {d:0>6} of original output\n", .{i});
+        }
+
+        // Sleep briefly to let terminal catch up
+        //try std.time.sleep(1 * std.time.ns_per_s);
+
+        // Attempt to scroll viewport to the very top of buffer
+        // Using different methods to test what works:
+
+        // Method 1: Using relative scroll
+        try stdout.writeAll("\x1b[10000A"); // Try to move up 10000 lines
+
+        // Method 2: Using absolute positioning within the buffer
+        // Note: This might only work within the viewport, not the full buffer
+        try stdout.writeAll("\x1b[1;1H");
+
+        // Method 3: Using scrollback buffer navigation
+        // This is more terminal-dependent but might work in some terminals
+        try stdout.writeAll("\x1b[3J"); // Clear scrollback
+        try stdout.writeAll("\x1b]1337;CurrentDir=?\x07"); // Query current directory (forces some terminals to scroll)
+
+        // Try to write at the current position
+        try stdout.writeAll("\x1b[31m"); // Red text
+        try stdout.print("\n=== ATTEMPTING TO INSERT AT POSITION {d} ===\n", .{0});
+        try stdout.writeAll("If you can see this, we successfully wrote to buffer\n");
+        try stdout.writeAll("Testing buffer manipulation...\n");
+        try stdout.writeAll("=== END TEST CONTENT ===\n");
+        try stdout.writeAll("\x1b[0m"); // Reset color
+
+        // Add a marker at the end to show we're done
+        try stdout.writeAll("\x1b[10000B"); // Try to move back down
+        try stdout.writeAll("\nTest completed - check if content was inserted at top!\n");
+    }
 }
 
 pub const std_options: std.Options = .{
