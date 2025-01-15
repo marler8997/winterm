@@ -14,11 +14,21 @@ A terminal for Windows.
 
 # Status
 
-The renderer is pretty much done. VT parsing is not implemented and IO with the child process isn't quite working.
+The renderer is pretty much done, the terminal part is pretty basic/crashy at the moment.
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/bd567ad1-2bf0-4404-ab50-be18c2880cbe" />
 </p>
+
+## Custom shaders.
+
+winterm uses Direct3D11 and has a command-line option to override the shader.  Here's an example of what you can do with just a few lines of shader code:
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/88022a63-f85d-4627-8ae0-f578361fc52f" />
+</p>
+
+
 
 # Acknowledgements
 
