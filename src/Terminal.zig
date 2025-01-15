@@ -13,13 +13,18 @@ const Screen = @import("Screen.zig");
 const wmapp = @import("wmapp.zig");
 const XY = @import("xy.zig").XY;
 
+const vtlog = std.log.scoped(.vt);
+
 // true if the terminal has been updated in some way that
 // it needs to update the screen
 dirty: bool = true,
+cursor_dirty: bool = true,
 high_surrogate: ?u16 = null,
 input: PagedMem(std.mem.page_size) = .{},
 buffer: PagedMem(std.mem.page_size) = .{},
-buffer_write_cursor: usize = 0,
+cursor: usize = 0,
+scroll_pos: usize = 0,
+cursor_visible: bool = true,
 
 child_process: ?ChildProcess = null,
 
@@ -108,29 +113,23 @@ fn doAction(self: *Terminal, hwnd: win32.HWND, action: ghostty.terminal.Parser.A
                 "todo: handle invalid codepoint {} (0x{0x}) ({s})",
                 .{ codepoint, @errorName(e) },
             );
-            self.bufferWrite(utf8_buf[0..utf8_len]);
-            // TODO: don't mark as dirty if the end of the buffer
-            //       is not in view
-            self.dirty = true;
+            self.bufferPrint("{s}", .{utf8_buf[0..utf8_len]});
         },
         .execute => |control_code| switch (control_code) {
             // '\b' => {},
             '\n' => {
-                std.debug.assert(self.buffer_write_cursor <= self.buffer.len);
-                while (self.buffer_write_cursor < self.buffer.len) {
-                    if (self.buffer.getByte(self.buffer_write_cursor) == '\n') {
-                        self.buffer_write_cursor += 1;
+                std.debug.assert(self.cursor <= self.buffer.len);
+                while (self.cursor < self.buffer.len) {
+                    if (self.buffer.getByte(self.cursor) == '\n') {
+                        self.cursor += 1;
                         return;
                     }
-                    self.buffer_write_cursor += 1;
+                    self.cursor += 1;
                 }
-                self.bufferWrite("\n");
-                // TODO: don't mark as dirty if the end of the buffer
-                //       is not in view
-                self.dirty = true;
+                self.bufferPrint("\n", .{});
             },
             '\r' => {
-                self.buffer_write_cursor = self.buffer.scanBackwardsScalar(self.buffer_write_cursor, '\n');
+                self.cursor = self.buffer.scanBackwardsScalar(self.cursor, '\n');
             },
             else => std.log.err(
                 "todo: handle control code {} (0x{0x}) \"{}\"",
@@ -150,6 +149,22 @@ fn doAction(self: *Terminal, hwnd: win32.HWND, action: ghostty.terminal.Parser.A
 
 fn handleCsiDispatch(self: *Terminal, csi: ghostty.terminal.Parser.Action.CSI) !void {
     switch (csi.final) {
+        'H' => {
+            if (csi.intermediates.len > 0) return error.UnexpectedIntermediates;
+            if (csi.params.len == 0) {
+                vtlog.debug("cursor home", .{});
+                self.cursor = self.scroll_pos;
+            } else if (csi.params.len == 2) {
+                vtlog.debug(
+                    "cursor home row {} col {}",
+                    .{ csi.params[0], csi.params[1] },
+                );
+                std.log.err(
+                    "todo: move cursor to row {} column {}",
+                    .{ csi.params[0], csi.params[1] },
+                );
+            } else return error.UnexpectedParams;
+        },
         'J' => {
             if (csi.intermediates.len > 0) return error.UnexpectedIntermediates;
             // Get the erase mode parameter, defaulting to 0 if no params
@@ -162,17 +177,43 @@ fn handleCsiDispatch(self: *Terminal, csi: ghostty.terminal.Parser.Action.CSI) !
                     std.log.err("todo: clear screen from cursor up", .{});
                 },
                 2 => {
-                    // TODO: if not at beginning, ensure there's a bunch
-                    // of newlines at the end of the buffer
-                    _ = self;
-                    std.log.err("todo: clear entire screen", .{});
+                    vtlog.debug(
+                        "clear screen (len={} cursor={} scroll={})",
+                        .{ self.buffer.len, self.cursor, self.scroll_pos },
+                    );
+                    self.buffer.len = self.scroll_pos;
+                    self.cursor = self.scroll_pos;
+                    self.dirty = true;
                 },
                 else => {
                     std.log.warn("unknown clear screen mode {}", .{mode});
                 },
             }
         },
-        else => return error.Unsupported,
+        'X' => {
+            if (csi.intermediates.len > 0) return error.UnexpectedIntermediates;
+            if (csi.params.len != 1) return error.UnexpectedParams;
+            // for (0 .. csi.param) |p| {
+            //     std.log.info("here: params is {d}", .{csi.params});
+            // }
+            return error.Todo;
+        },
+        'l' => {
+            if (!std.mem.eql(u8, &.{'?'}, csi.intermediates)) return error.UnexpectedIntermediates;
+            if (std.mem.eql(u16, &.{25}, csi.params)) {
+                vtlog.debug(
+                    "cursor hide ({s} hidden)",
+                    .{if (self.cursor_visible) "newly" else "already"},
+                );
+                if (self.cursor_visible) {
+                    self.cursor_visible = false;
+                    self.cursor_dirty = true;
+                }
+                return;
+            }
+            if (csi.params.len != 0) return error.TodoParams;
+        },
+        else => return error.Todo,
     }
 }
 
@@ -282,26 +323,20 @@ pub fn addInput(self: *Terminal, utf8: []const u8) void {
     self.dirty = true;
 }
 
-fn bufferWrite(self: *Terminal, data: []const u8) void {
-    std.debug.assert(self.buffer_write_cursor <= self.buffer.len);
-    const cursor_at_end = (self.buffer_write_cursor == self.buffer.len);
-    self.buffer.writer().writeAll(data) catch |e| oom(e);
-    if (cursor_at_end) {
-        self.buffer_write_cursor = self.buffer.len;
-    }
-}
 fn bufferPrint(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
-    std.debug.assert(self.buffer_write_cursor <= self.buffer.len);
-    const cursor_at_end = (self.buffer_write_cursor == self.buffer.len);
+    std.debug.assert(self.cursor <= self.buffer.len);
+    const cursor_at_end = (self.cursor == self.buffer.len);
     self.buffer.writer().print(fmt, args) catch |e| oom(e);
     if (cursor_at_end) {
-        self.buffer_write_cursor = self.buffer.len;
+        self.cursor = self.buffer.len;
     }
+    // TODO: only mark the terminal as dirty if the new data is in view
+    self.dirty = true;
 }
 
 fn appendError(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (self.buffer.len > 0 and self.buffer.lastByte() != '\n') {
-        self.bufferWrite("\n");
+        self.bufferPrint("\n", .{});
     }
     self.bufferPrint("error: " ++ fmt ++ "\n", args);
 }
@@ -360,19 +395,19 @@ fn flushInput2(
             .index = command_start,
         };
         if (self.buffer.len > 0 and self.buffer.lastByte() != '\n') {
-            self.bufferWrite("\n");
+            self.bufferPrint("\n", .{});
         }
-        self.bufferWrite("> ");
+        self.bufferPrint("> ", .{});
         while (true) {
             const save_pos = it.index;
             const entry = it.next() orelse break;
             for (save_pos..it.index) |i| {
-                self.bufferWrite(&[_]u8{self.input.getByte(i)});
+                self.bufferPrint("{s}", .{[_]u8{self.input.getByte(i)}});
             }
             const value = entry.value orelse return out_err.setZig("DecodeCommand", error.InvalidUtf8);
             al.append(arena.allocator(), value) catch |e| oom(e);
         }
-        self.bufferWrite("\n");
+        self.bufferPrint("\n", .{});
         break :blk al.toOwnedSliceSentinel(arena.allocator(), 0) catch |e| oom(e);
     };
 
@@ -694,9 +729,10 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
     ));
     const buffer_row_count = screen.row_count - command_row_count;
     const buffer_start: usize = blk: {
-        const skip_last_newline = (self.buffer.len > 0 and self.buffer.getByte(self.buffer.len - 1) == '\n');
+        const skip_last_newline = (self.scroll_pos > 0 and
+            self.buffer.getByte(self.scroll_pos - 1) == '\n');
         var buffer_index = self.buffer.scanBackwardsScalar(
-            self.buffer.len - @as(usize, if (skip_last_newline) 1 else 0),
+            self.scroll_pos - @as(usize, if (skip_last_newline) 1 else 0),
             '\n',
         );
         var lines_scanned: usize = 1;
@@ -714,12 +750,15 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
         .slice = self.input.sliceAll(),
         .index = command_start,
     };
+    var found_cursor = false;
     for (0..screen.row_count) |row_index| {
         const row_offset = @as(usize, screen.col_count) * row_index;
         const row = screen.cells.items[row_offset..][0..screen.col_count];
         var found_newline = false;
         if (row_index < buffer_row_count) {
             for (row) |*cell| {
+                const at_cursor = !found_cursor and (buffer_it.index == self.cursor);
+                found_cursor = found_cursor or at_cursor;
                 const codepoint: u21 = blk: {
                     if (found_newline) break :blk ' ';
                     if (buffer_it.next()) |cp| {
@@ -731,10 +770,13 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
                     }
                     break :blk ' ';
                 };
+                const bg = render.Color.initRgba(0, 0, 0, 0);
+                const fg = render.Color.initRgb(255, 255, 255);
+                const render_cursor = (at_cursor and self.cursor_visible);
                 cell.* = .{
                     .codepoint = codepoint,
-                    .background = render.Color.initRgba(0, 0, 0, 0),
-                    .foreground = render.Color.initRgb(255, 255, 255),
+                    .background = if (render_cursor) fg else bg,
+                    .foreground = if (render_cursor) bg else fg,
                 };
             }
         } else {
