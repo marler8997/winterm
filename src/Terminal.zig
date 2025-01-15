@@ -27,9 +27,9 @@ scroll_pos: usize = 0,
 cursor_visible: bool = true,
 parser: ghostty.terminal.Parser = .{},
 
-fn nextTop(row_count: u16, top: u16) u16 {
-    std.debug.assert(top < row_count);
-    return if (top == row_count - 1) 0 else top + 1;
+fn nextRowWrap(row_count: u16, row: u16) u16 {
+    std.debug.assert(row < row_count);
+    return if (row + 1 == row_count) 0 else row + 1;
 }
 
 fn cellIndexFromRow(cell_count: GridPos, top: u16, row: u16) usize {
@@ -44,6 +44,12 @@ fn cellIndexFromRow(cell_count: GridPos, top: u16, row: u16) usize {
 fn cellIndexFromPos(cell_count: GridPos, top: u16, pos: GridPos) usize {
     std.debug.assert(pos.col < cell_count.col);
     return cellIndexFromRow(cell_count, top, pos.row) + pos.col;
+}
+
+fn clearCells(cells: []Screen.Cell) void {
+    for (cells) |*cell| {
+        cell.* = .{ .codepoint = null, .background = 0, .foreground = 0 };
+    }
 }
 
 fn isUtf8Extension(c: u8) bool {
@@ -110,25 +116,31 @@ fn doAction(
             );
         },
         .execute => |control_code| switch (control_code) {
-            // '\b' => {},
+            8 => {
+                if (self.cursor.col == 0) @panic("todo");
+                self.cursor.col -= 1;
+                vtlog.debug("\\b cursor now at col {}", .{self.cursor.col});
+                self.cursor_dirty = true;
+            },
             '\n' => {
+                //const next_cursor_row = nextRowWrap(screen.row_count, self.cursor.row);
                 if (self.cursor.row + 1 == screen.row_count) {
-                    const new_top = nextTop(screen.row_count, screen.top);
-                    const cell_start = cellIndexFromPos(
+                    const new_top = nextRowWrap(screen.row_count, screen.top);
+                    const replace_start = cellIndexFromPos(
                         screen.cellCount(),
-                        screen.top,
+                        new_top,
                         .{ .row = screen.top, .col = 0 },
                     );
-                    self.saveCellsToBuffer(screen.cells[cell_start..][0..screen.col_count]);
-                    self.cursor = .{ .row = screen.top, .col = 0 };
+                    self.saveCellsToBuffer(screen.cells[replace_start..][0..screen.col_count]);
+                    clearCells(screen.cells[replace_start..][0..screen.col_count]);
                     screen.top = new_top;
                     self.dirty = true;
                 } else {
                     const new_cursor: GridPos = .{ .row = self.cursor.row + 1, .col = 0 };
-                    vtlog.debug("\\n new row={}", .{new_cursor.row});
                     self.cursor = new_cursor;
                     self.cursor_dirty = true;
                 }
+                vtlog.debug("\\n new row is {}", .{self.cursor.row});
             },
             '\r' => {
                 const new_cursor: GridPos = .{ .row = self.cursor.row, .col = 0 };
@@ -221,13 +233,18 @@ fn handleCsiDispatch(self: *Terminal, screen: *Screen, csi: ghostty.terminal.Par
         'X' => {
             if (csi.intermediates.len > 0) return error.UnexpectedIntermediates;
             if (csi.params.len != 1) return error.UnexpectedParams;
-            for (0..csi.params[0]) |_| {
-                screen.cells[cellIndexFromPos(screen.cellCount(), screen.top, self.cursor)] = .{
+            vtlog.debug("erase {} characters", .{csi.params[0]});
+            for (0..csi.params[0]) |i| {
+                const index = cellIndexFromPos(
+                    screen.cellCount(),
+                    screen.top,
+                    .{ .row = self.cursor.row, .col = self.cursor.col + @as(u16, @intCast(i)) },
+                );
+                screen.cells[index] = .{
                     .codepoint = null,
                     .background = 0,
                     .foreground = 0,
                 };
-                self.cursor.col += 1;
             }
         },
         'h' => {
