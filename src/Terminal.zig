@@ -22,7 +22,7 @@ cursor_dirty: bool = true,
 high_surrogate: ?u16 = null,
 input: PagedMem(std.mem.page_size) = .{},
 buffer: PagedMem(std.mem.page_size) = .{},
-cursor: usize = 0,
+cursor: struct { row: u16, col: u16 } = .{ .row = 0, .col = 0 },
 scroll_pos: usize = 0,
 cursor_visible: bool = true,
 
@@ -118,18 +118,19 @@ fn doAction(self: *Terminal, hwnd: win32.HWND, action: ghostty.terminal.Parser.A
         .execute => |control_code| switch (control_code) {
             // '\b' => {},
             '\n' => {
-                std.debug.assert(self.cursor <= self.buffer.len);
-                while (self.cursor < self.buffer.len) {
-                    if (self.buffer.getByte(self.cursor) == '\n') {
-                        self.cursor += 1;
-                        return;
-                    }
-                    self.cursor += 1;
-                }
-                self.bufferPrint("\n", .{});
+                @panic("TODO: handle \\n control code");
+                // while (self.cursor < self.buffer.len) {
+                //     if (self.buffer.getByte(self.cursor) == '\n') {
+                //         self.cursor += 1;
+                //         return;
+                //     }
+                //     self.cursor += 1;
+                // }
+                // self.bufferPrint("\n", .{});
             },
             '\r' => {
-                self.cursor = self.buffer.scanBackwardsScalar(self.cursor, '\n');
+                @panic("TODO: handle \\r control code");
+                //self.cursor = self.buffer.scanBackwardsScalar(self.cursor, '\n');
             },
             else => std.log.err(
                 "todo: handle control code {} (0x{0x}) \"{}\"",
@@ -152,17 +153,19 @@ fn handleCsiDispatch(self: *Terminal, csi: ghostty.terminal.Parser.Action.CSI) !
         'H' => {
             if (csi.intermediates.len > 0) return error.UnexpectedIntermediates;
             if (csi.params.len == 0) {
-                vtlog.debug("cursor home", .{});
-                self.cursor = self.scroll_pos;
+                const moved = (self.cursor.row != 0) or (self.cursor.col != 0);
+                vtlog.debug("cursor home ({s})", .{if (moved) "moved" else "already there"});
+                self.cursor = .{ .row = 0, .col = 0 };
+                self.cursor_dirty = moved;
             } else if (csi.params.len == 2) {
+                const row, const col = .{ csi.params[0], csi.params[1] };
+                const moved = (self.cursor.row != row) or (self.cursor.col != col);
                 vtlog.debug(
-                    "cursor home row {} col {}",
-                    .{ csi.params[0], csi.params[1] },
+                    "cursor move row {} col {} ({s})",
+                    .{ row, col, if (moved) "moved" else "already there" },
                 );
-                std.log.err(
-                    "todo: move cursor to row {} column {}",
-                    .{ csi.params[0], csi.params[1] },
-                );
+                self.cursor = .{ .row = row, .col = col };
+                self.cursor_dirty = moved;
             } else return error.UnexpectedParams;
         },
         'J' => {
@@ -181,8 +184,11 @@ fn handleCsiDispatch(self: *Terminal, csi: ghostty.terminal.Parser.Action.CSI) !
                         "clear screen (len={} cursor={} scroll={})",
                         .{ self.buffer.len, self.cursor, self.scroll_pos },
                     );
-                    self.buffer.len = self.scroll_pos;
-                    self.cursor = self.scroll_pos;
+                    if (self.buffer.len != self.scroll_pos) {
+                        self.buffer.len = self.scroll_pos;
+                        self.dirty = true;
+                    }
+                    self.cursor = .{ .row = 0, .col = 0 };
                     self.dirty = true;
                 },
                 else => {
@@ -324,12 +330,25 @@ pub fn addInput(self: *Terminal, utf8: []const u8) void {
 }
 
 fn bufferPrint(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
-    std.debug.assert(self.cursor <= self.buffer.len);
-    const cursor_at_end = (self.cursor == self.buffer.len);
-    self.buffer.writer().print(fmt, args) catch |e| oom(e);
-    if (cursor_at_end) {
-        self.cursor = self.buffer.len;
+    if (self.cursor.row != 0) std.debug.panic("todo: print to row {}", .{self.cursor.row});
+    if (self.cursor.col != 0) std.debug.panic("todo: print to col {}", .{self.cursor.col});
+
+    if (self.scroll_pos != self.buffer.len) @panic("todo");
+    if (true) {
+        std.io.getStdErr().writer().print("PRINTING scroll={} buffer_len={} cursor={}:\n---\n", .{
+            self.scroll_pos,
+            self.buffer.len,
+            self.cursor,
+        }) catch unreachable;
+        std.io.getStdErr().writer().print(fmt, args) catch unreachable;
+        std.io.getStdErr().writer().print("\n---\n", .{}) catch unreachable;
     }
+    self.buffer.writer().print(fmt, args) catch |e| oom(e);
+    if (true) @panic("todo: wrap?");
+    if (true) @panic("todo: auto scroll?");
+    // if (cursor_at_end) {
+    //     self.cursor = self.buffer.len;
+    // }
     // TODO: only mark the terminal as dirty if the new data is in view
     self.dirty = true;
 }
@@ -750,15 +769,20 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
         .slice = self.input.sliceAll(),
         .index = command_start,
     };
-    var found_cursor = false;
+
     for (0..screen.row_count) |row_index| {
         const row_offset = @as(usize, screen.col_count) * row_index;
-        const row = screen.cells.items[row_offset..][0..screen.col_count];
+        const row_cells = screen.cells.items[row_offset..][0..screen.col_count];
         var found_newline = false;
         if (row_index < buffer_row_count) {
-            for (row) |*cell| {
-                const at_cursor = !found_cursor and (buffer_it.index == self.cursor);
-                found_cursor = found_cursor or at_cursor;
+            for (row_cells, 0..) |*cell, col_index| {
+                // if (found_cursor_buffer_pos == null) {
+                //     if (buffer_it.index == self.cursor.buffer_pos) {
+                //         found_cursor_buffer_pos = .{ .x = @intCast(col), .y = @intCast(row) };
+                //     }
+                //     //const at_cursor = !found_cursor_buffer_pos and (
+                //     //found_cursor = found_cursor or at_cursor;
+                // }
                 const codepoint: u21 = blk: {
                     if (found_newline) break :blk ' ';
                     if (buffer_it.next()) |cp| {
@@ -772,6 +796,8 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
                 };
                 const bg = render.Color.initRgba(0, 0, 0, 0);
                 const fg = render.Color.initRgb(255, 255, 255);
+
+                const at_cursor = (self.cursor.row == row_index and self.cursor.col == col_index);
                 const render_cursor = (at_cursor and self.cursor_visible);
                 cell.* = .{
                     .codepoint = codepoint,
@@ -780,7 +806,7 @@ pub fn update(self: *Terminal, screen: *const Screen) void {
                 };
             }
         } else {
-            for (row) |*cell| {
+            for (row_cells) |*cell| {
                 const codepoint = command_it.next() orelse ' ';
                 cell.* = .{
                     .codepoint = codepoint,
