@@ -131,8 +131,9 @@ fn doAction(
                         new_top,
                         .{ .row = screen.top, .col = 0 },
                     );
-                    self.saveCellsToBuffer(screen.cells[replace_start..][0..screen.col_count]);
-                    clearCells(screen.cells[replace_start..][0..screen.col_count]);
+                    const cells = screen.cells[replace_start..][0..screen.col_count];
+                    self.saveCellsToBuffer(cells);
+                    clearCells(cells);
                     screen.top = new_top;
                     self.dirty = true;
                 } else {
@@ -175,7 +176,11 @@ fn handleCsiDispatch(self: *Terminal, screen: *Screen, csi: ghostty.terminal.Par
                 self.cursor = .{ .row = 0, .col = 0 };
                 self.cursor_dirty = moved;
             } else if (csi.params.len == 2) {
-                const row, const col = .{ csi.params[0], csi.params[1] };
+                const row_num, const col_num = .{ csi.params[0], csi.params[1] };
+                if (row_num == 0) std.debug.panic("row can be 0?", .{});
+                if (col_num == 0) std.debug.panic("row can be 0?", .{});
+                const row = row_num - 1;
+                const col = col_num - 1;
                 const moved = (self.cursor.row != row) or (self.cursor.col != col);
                 vtlog.debug(
                     "cursor move row {} col {} ({s})",
