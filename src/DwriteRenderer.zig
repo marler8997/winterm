@@ -9,14 +9,19 @@ const XY = @import("xy.zig").XY;
 
 pub const Font = dwrite.Font;
 
+pub const needs_d3d_context = false;
 pub const needs_direct2d = true;
+pub const texture_access: enum { gpu, cpu } = .gpu;
 
 render_target: *win32.ID2D1RenderTarget,
 white_brush: *win32.ID2D1SolidColorBrush,
 pub fn init(
+    d3d_context: void,
     d2d_factory: *win32.ID2D1Factory,
     texture: *win32.ID3D11Texture2D,
 ) DwriteRenderer {
+    _ = d3d_context;
+
     const dxgi_surface = win32ext.queryInterface(texture, win32.IDXGISurface);
     defer _ = dxgi_surface.IUnknown.Release();
 

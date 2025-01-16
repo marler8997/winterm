@@ -2,12 +2,12 @@ const TrueTypeRenderer = @This();
 
 const std = @import("std");
 const win32 = @import("win32").everything;
-const win32ext = @import("win32ext.zig");
 
 // add back when we're on a compatible version
 //const TrueType = @import("TrueType");
 const TrueType = struct {};
 const FontFace = @import("FontFace.zig");
+const win32font = @import("win32font.zig");
 const XY = @import("xy.zig").XY;
 
 pub const needs_direct2d = false;
@@ -18,35 +18,11 @@ pub fn init(
 ) TrueTypeRenderer {
     _ = d2d_factory;
     _ = texture;
-    // const dxgi_surface = win32ext.queryInterface(texture, win32.IDXGISurface);
-    // defer _ = dxgi_surface.IUnknown.Release();
-
-    return .{
-        // .render_target = render_target,
-        // .white_brush = white_brush,
-    };
+    return .{};
 }
 pub fn deinit(self: *TrueTypeRenderer) void {
     //self.ttf.definit();
     self.* = undefined;
-}
-
-fn logFonts() void {
-    const fonts_path = "C:\\Windows\\Fonts";
-    var fonts_dir = std.fs.openDirAbsolute(fonts_path, .{ .iterate = true }) catch |e| std.debug.panic(
-        "open fonts dir failed with {s}",
-        .{@errorName(e)},
-    );
-    defer fonts_dir.close();
-    var iterator = fonts_dir.iterate();
-    while (iterator.next() catch |e| std.debug.panic(
-        "dir iterate failed with {s}",
-        .{@errorName(e)},
-    )) |entry| {
-        if (std.mem.endsWith(u8, entry.name, ".ttf")) {
-            std.debug.print("{s}\n", .{entry.name});
-        }
-    }
 }
 
 pub const Font = struct {
@@ -54,7 +30,7 @@ pub const Font = struct {
     cell_size: XY(u16),
 
     pub fn init(dpi: u32, size: f32, face: *const FontFace) Font {
-        logFonts();
+        win32font.logFonts();
 
         var path_buf: [400]u8 = undefined;
         const path = std.fmt.bufPrint(

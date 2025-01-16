@@ -16,6 +16,11 @@
             .hash = "1220a5ede2cd84c9d137f2439e6dacbc2cab965b63a1542264bb373f22aa13a4113b",
             .lazy = true,
         },
+        .schrift = .{
+            .url = "git+https://github.com/marler8997/libschrift#4966481ce68f09ba0556d02152aba0c99ef5885d",
+            .hash = "122035f718d2a2c5fc2a372bb9d53eaede805273bc17b2c52ac1bab6f1abffb4d620",
+            .lazy = true,
+        },
     },
     .paths = .{
         ".",

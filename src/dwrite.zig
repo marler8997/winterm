@@ -23,8 +23,10 @@ pub fn init() void {
 }
 
 pub const Font = struct {
-    text_format: *win32.IDWriteTextFormat,
+    // public field
     cell_size: XY(u16),
+
+    text_format: *win32.IDWriteTextFormat,
 
     pub fn init(dpi: u32, size: f32, face: *const FontFace) Font {
         var text_format: *win32.IDWriteTextFormat = undefined;
@@ -73,8 +75,8 @@ pub const Font = struct {
         };
 
         return .{
-            .text_format = text_format,
             .cell_size = cell_size,
+            .text_format = text_format,
         };
     }
 

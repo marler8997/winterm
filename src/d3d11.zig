@@ -9,6 +9,7 @@ const GlyphIndexCache = @import("GlyphIndexCache.zig");
 const TextRenderer = switch (build_options.textrender) {
     .dwrite => @import("DwriteRenderer.zig"),
     .truetype => @import("TrueTypeRenderer.zig"),
+    .schrift => @import("SchriftRenderer.zig"),
 };
 
 const XY = @import("xy.zig").XY;
@@ -202,9 +203,15 @@ pub const WindowState = struct {
                     "todo: handle invalid codepoint {} (0x{0x}) ({s})",
                     .{ codepoint, @errorName(e) },
                 );
+                const log_render_times = false;
+                var timer = if (log_render_times) (std.time.Timer.start() catch unreachable) else {};
                 staging.text_renderer.render(
                     font,
                     utf8_buf[0..utf8_len],
+                );
+                if (log_render_times) std.log.info(
+                    "rendered glyph '{s}' in {d} ms",
+                    .{ utf8_buf[0..utf8_len], @as(f32, @floatFromInt(timer.read())) / std.time.ns_per_ms },
                 );
                 const box: win32.D3D11_BOX = .{
                     .left = 0,
@@ -722,12 +729,12 @@ const StagingTexture = struct {
         size: XY(u16),
     ) struct {
         texture: *win32.ID3D11Texture2D,
-        text_renderer: TextRenderer,
+        text_renderer: *TextRenderer,
     } {
         if (self.cached) |*cached| {
             if (cached.size.eql(size)) return .{
                 .texture = cached.texture,
-                .text_renderer = cached.text_renderer,
+                .text_renderer = &cached.text_renderer,
             };
             std.log.debug(
                 "resizing staging texture from {}x{} to {}x{}",
@@ -746,9 +753,22 @@ const StagingTexture = struct {
             .ArraySize = 1,
             .Format = .A8_UNORM,
             .SampleDesc = .{ .Count = 1, .Quality = 0 },
-            .Usage = .DEFAULT,
-            .BindFlags = .{ .RENDER_TARGET = 1 },
-            .CPUAccessFlags = .{},
+            .Usage = switch (TextRenderer.texture_access) {
+                .gpu => .DEFAULT,
+                .cpu => .STAGING,
+            },
+            .BindFlags = .{
+                .RENDER_TARGET = switch (TextRenderer.texture_access) {
+                    .gpu => 1,
+                    .cpu => 0,
+                },
+            },
+            .CPUAccessFlags = .{
+                .WRITE = switch (TextRenderer.texture_access) {
+                    .gpu => 0,
+                    .cpu => 1,
+                },
+            },
             .MiscFlags = .{},
         };
         {
@@ -757,7 +777,11 @@ const StagingTexture = struct {
         }
         errdefer _ = texture.IUnknown.Release();
 
-        const text_renderer = TextRenderer.init(global.d2d_factory, texture);
+        const text_renderer = TextRenderer.init(
+            if (TextRenderer.needs_d3d_context) global.d3d.context else {},
+            global.d2d_factory,
+            texture,
+        );
         errdefer text_renderer.deinit();
 
         self.cached = .{
@@ -767,7 +791,7 @@ const StagingTexture = struct {
         };
         return .{
             .texture = self.cached.?.texture,
-            .text_renderer = text_renderer,
+            .text_renderer = &self.cached.?.text_renderer,
         };
     }
 };

@@ -3,6 +3,7 @@ const std = @import("std");
 const Textrender = enum {
     dwrite,
     truetype,
+    schrift,
 };
 
 pub fn build(b: *std.Build) void {
@@ -14,6 +15,15 @@ pub fn build(b: *std.Build) void {
         "truetype",
         "Use https://codeberg.org/andrewrk/TrueType for text rendering",
     ) orelse false;
+    const schrift_enabled = b.option(
+        bool,
+        "schrift",
+        "Use libschrift for text rendering",
+    ) orelse false;
+    if (truetype_enabled and schrift_enabled) {
+        std.log.err("cannot enable both truetype and schrift", .{});
+        std.process.exit(0xff);
+    }
 
     const win32_dep = b.dependency("win32", .{});
     const win32_mod = win32_dep.module("zigwin32");
@@ -25,7 +35,10 @@ pub fn build(b: *std.Build) void {
 
     {
         const options = b.addOptions();
-        options.addOption(Textrender, "textrender", if (truetype_enabled) .truetype else .dwrite);
+        options.addOption(Textrender, "textrender", if (truetype_enabled)
+            .truetype
+        else
+            (if (schrift_enabled) .schrift else .dwrite));
 
         const exe = b.addExecutable(.{
             .name = "winterm",
@@ -44,6 +57,13 @@ pub fn build(b: *std.Build) void {
         if (truetype_enabled) {
             if (b.lazyDependency("truetype", .{})) |truetype_dep| {
                 exe.root_module.addImport("TrueType", truetype_dep.module("TrueType"));
+            }
+        }
+        if (schrift_enabled) {
+            if (b.lazyDependency("schrift", .{})) |schrift_dep| {
+                exe.root_module.addImport("schrift", b.createModule(.{
+                    .root_source_file = schrift_dep.path("schrift.zig"),
+                }));
             }
         }
 
