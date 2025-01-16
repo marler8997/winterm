@@ -38,21 +38,3 @@ pub fn clear(self: *const Screen) void {
         };
     }
 }
-
-// returns true if the size was changed
-pub fn resize(self: *Screen, allocator: std.mem.Allocator, cell_count: GridPos) error{OutOfMemory}!bool {
-    if (self.row_count == cell_count.row and self.col_count == cell_count.col) return false;
-
-    if (self.col_count != cell_count.col) @panic("todo: support resizing width");
-
-    const old_cell_count: u32 = @as(u32, self.row_count) * @as(u32, self.col_count);
-    const new_cell_count: u32 = @as(u32, cell_count.row) * @as(u32, cell_count.col);
-    _ = old_cell_count;
-    _ = new_cell_count;
-
-    _ = allocator;
-    std.debug.panic(
-        "todo: implement Screen.resize (from row/cols {}/{} to {}/{})",
-        .{ self.row_count, self.col_count, cell_count.row, cell_count.col },
-    );
-}

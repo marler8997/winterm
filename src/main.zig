@@ -617,10 +617,9 @@ fn WndProc(
             const cell_size = font.getCellSize(u16);
             const col_count: u16 = @intCast(@divTrunc(client_size.x + cell_size.x - 1, cell_size.x));
             const row_count: u16 = @intCast(@divTrunc(client_size.y + cell_size.y - 1, cell_size.y));
-            if (col_count == state.screen.col_count and row_count == state.screen.row_count)
-                return 0;
-            if (state.screen.resize(
+            if (global.terminal.resize(
                 global.screen_arena.allocator(),
+                &state.screen,
                 .{ .row = row_count, .col = col_count },
             ) catch |e| oom(e)) {
                 var err: Error = undefined;
@@ -645,8 +644,9 @@ fn WndProc(
             const col_count: u16 = @intCast(@divTrunc(client_size.x + cell_size.x - 1, cell_size.x));
             const row_count: u16 = @intCast(@divTrunc(client_size.y + cell_size.y - 1, cell_size.y));
 
-            if (state.screen.resize(
+            if (global.terminal.resize(
                 global.screen_arena.allocator(),
+                &state.screen,
                 .{ .row = row_count, .col = col_count },
             ) catch |e| oom(e)) {
                 var err: Error = undefined;

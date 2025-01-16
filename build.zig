@@ -51,8 +51,9 @@ pub fn build(b: *std.Build) void {
             .single_threaded = true,
         });
         exe.root_module.addImport("win32", win32_mod);
+        const install = b.addInstallArtifact(exe, .{});
         const run = b.addRunArtifact(exe);
-        run.step.dependOn(b.getInstallStep());
+        run.step.dependOn(&install.step);
         if (b.args) |args| {
             run.addArgs(args);
         }

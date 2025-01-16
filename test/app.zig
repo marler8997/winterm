@@ -4,6 +4,18 @@ const win32 = @import("win32").everything;
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
+
+    if (false) {
+        for (0..26) |row| {
+            const str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+            for (0..87 - row) |_| {
+                const offset = row % str.len;
+                try stdout.writeAll(str[offset..][0..1]);
+            }
+            try stdout.writeAll("\n");
+        }
+    }
+
     if (false) {
         try stdout.writeAll("TestAppStdout\n");
         try stderr.writeAll("TestAppStderr\n");

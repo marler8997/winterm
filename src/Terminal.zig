@@ -46,20 +46,83 @@ fn cellIndexFromPos(cell_count: GridPos, top: u16, pos: GridPos) usize {
     return cellIndexFromRow(cell_count, top, pos.row) + pos.col;
 }
 
-fn clearCells(cells: []Screen.Cell) void {
-    for (cells) |*cell| {
-        cell.* = .{ .codepoint = null, .background = 0, .foreground = 0 };
-    }
-}
-
 fn isUtf8Extension(c: u8) bool {
     return (c & 0b1100_0000) == 0b1000_0000;
 }
 
-fn saveCellsToBuffer(self: *Terminal, cells: []const Screen.Cell) void {
+fn clearCellSlice(cells: []Screen.Cell) void {
+    @memset(cells, .{ .codepoint = null, .background = 0, .foreground = 0 });
+}
+fn saveCellSliceToBuffer(self: *Terminal, cells: []const Screen.Cell) void {
     _ = self;
     _ = cells;
     std.log.info("todo: save cells to buffer (maybe we make this configurable?)", .{});
+}
+
+fn saveCellsToBuffer(self: *Terminal, cells: []const Screen.Cell, top: u16, count: u16) void {
+    _ = self;
+    _ = cells;
+    _ = top;
+    _ = count;
+    std.log.info("todo: save cells to buffer (maybe we make this configurable?)", .{});
+}
+
+// returns true if the size was changed
+pub fn resize(
+    self: *Terminal,
+    screen_allocator: std.mem.Allocator,
+    screen: *Screen,
+    cell_count: GridPos,
+) error{OutOfMemory}!bool {
+    if (screen.row_count == cell_count.row and screen.col_count == cell_count.col) return false;
+
+    if (screen.col_count != cell_count.col) @panic("todo: support resizing width");
+
+    const old_cell_count: u32 = @as(u32, screen.row_count) * @as(u32, screen.col_count);
+    const new_cell_count: u32 = @as(u32, cell_count.row) * @as(u32, cell_count.col);
+
+    if (old_cell_count >= new_cell_count) {
+        const save_len: u16 = @intCast(old_cell_count - new_cell_count);
+        self.saveCellsToBuffer(screen.cells, screen.top, save_len);
+
+        // works because we checked above that the old/new col count is the same
+        //const save_row_count = @divTrunc(save_len, cell_count.col);
+
+        // {
+        //     //const i = cellIndexFromRow(screen.cellCount(), screen.top, 0);
+        //     ~~~
+        //     screen.saveCellsToBuffer(
+        //     screen.saveCellsToBuffer(screen.cells[0..save_len]);
+
+        // const next_line_start = blk: {
+        //     var offset: usize = save_len;
+        //     const limit = @divTrunc(offset + cell_count.col - 1, cell_count.col);
+        //     while (offset < limit) {
+        //         if (screen.cells.codepoint == '\n') break :blk offset + 1;
+        //     }
+        //     break :blk limit;
+        // };
+
+        if (true) @panic("here");
+
+        // const next_line_start = @divTrunc(save_len + cell_count.col - 1, cell_count.col);
+        // const move_len = new_cell_count - next_line_start;
+        // std.mem.copyForwards(
+        //     screen.cells[0..move_len],
+        //     screen.cells[next_line_start..][0..move_len],
+        // );
+        // if (!allocator.resize(screen.cells, new_cell_count)) @panic("todo?");
+        // screen.cells.len = new_cell_count;
+        return;
+    } else {
+        @panic("here");
+    }
+
+    _ = screen_allocator;
+    std.debug.panic(
+        "todo: implement Screen.resize (from row/cols {}/{} to {}/{})",
+        .{ self.row_count, self.col_count, cell_count.row, cell_count.col },
+    );
 }
 
 pub fn handleChildProcessOutput(self: *Terminal, hwnd: win32.HWND, screen: *Screen, data: []const u8) void {
@@ -123,18 +186,12 @@ fn doAction(
                 self.cursor_dirty = true;
             },
             '\n' => {
-                //const next_cursor_row = nextRowWrap(screen.row_count, self.cursor.row);
                 if (self.cursor.row + 1 == screen.row_count) {
-                    const new_top = nextRowWrap(screen.row_count, screen.top);
-                    const replace_start = cellIndexFromPos(
-                        screen.cellCount(),
-                        new_top,
-                        .{ .row = screen.top, .col = 0 },
-                    );
-                    const cells = screen.cells[replace_start..][0..screen.col_count];
-                    self.saveCellsToBuffer(cells);
-                    clearCells(cells);
-                    screen.top = new_top;
+                    const top_index = cellIndexFromRow(screen.cellCount(), screen.top, 0);
+                    const top_row_cells = screen.cells[top_index..][0..screen.col_count];
+                    self.saveCellSliceToBuffer(top_row_cells);
+                    clearCellSlice(top_row_cells);
+                    screen.top = nextRowWrap(screen.row_count, screen.top);
                     self.dirty = true;
                 } else {
                     const new_cursor: GridPos = .{ .row = self.cursor.row + 1, .col = 0 };
