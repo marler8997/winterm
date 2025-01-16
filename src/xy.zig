@@ -10,5 +10,12 @@ pub fn XY(comptime T: type) type {
         pub fn eql(self: Self, other: Self) bool {
             return self.x == other.x and self.y == other.y;
         }
+
+        pub fn intCast(self: Self, comptime U: type) XY(U) {
+            return XY(U){
+                .x = @intCast(self.x),
+                .y = @intCast(self.y),
+            };
+        }
     };
 }

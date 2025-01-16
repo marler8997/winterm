@@ -365,7 +365,7 @@ pub export fn wWinMain(
     };
 
     global.icons = getIcons(dpi);
-    const cell_size = getFont(@max(dpi.x, dpi.y), global.font_size, &global.font_face).getCellSize(i32);
+    const cell_size = getFont(@max(dpi.x, dpi.y), global.font_size, &global.font_face).cell_size.intCast(i32);
     const placement = calcWindowPlacement(
         maybe_monitor,
         @max(dpi.x, dpi.y),
@@ -506,15 +506,14 @@ fn WndProc(
             const client_size = getClientSize(u16, hwnd);
             const dpi = win32.dpiFromHwnd(hwnd);
             const font = getFont(dpi, global.font_size, &global.font_face);
-            const cell_size = font.getCellSize(u16);
             const cell_count: GridPos = .{
-                .row = @intCast(@divTrunc(client_size.y + cell_size.y - 1, cell_size.y)),
-                .col = @intCast(@divTrunc(client_size.x + cell_size.x - 1, cell_size.x)),
+                .row = @intCast(@divTrunc(client_size.y + font.cell_size.y - 1, font.cell_size.y)),
+                .col = @intCast(@divTrunc(client_size.x + font.cell_size.x - 1, font.cell_size.x)),
             };
             if (cell_count.row == 0 or cell_count.col == 0) std.debug.panic("todo: handle cell counts {}", .{cell_count});
             std.log.info(
                 "screen is {} rows and {} cols (cell size {}x{}, pixel size {}x{})",
-                .{ cell_count.row, cell_count.col, cell_size.x, cell_size.y, client_size.x, client_size.y },
+                .{ cell_count.row, cell_count.col, font.cell_size.x, font.cell_size.y, client_size.x, client_size.y },
             );
 
             const screen = Screen.init(global.screen_arena.allocator(), cell_count) catch |e| oom(e);
@@ -599,8 +598,7 @@ fn WndProc(
             const rect: *win32.RECT = @ptrFromInt(@as(usize, @bitCast(lparam)));
             const dpi = win32.dpiFromHwnd(hwnd);
             const font = getFont(dpi, global.font_size, &global.font_face);
-            const cell_size = font.getCellSize(i32);
-            const new_rect = calcWindowRect(dpi, rect.*, wparam, cell_size);
+            const new_rect = calcWindowRect(dpi, rect.*, wparam, font.cell_size.intCast(i32));
             const state = stateFromHwnd(hwnd);
             state.bounds = .{
                 .token = new_rect,
@@ -614,9 +612,8 @@ fn WndProc(
             const client_size = getClientSize(u16, hwnd);
             const dpi = win32.dpiFromHwnd(hwnd);
             const font = getFont(dpi, global.font_size, &global.font_face);
-            const cell_size = font.getCellSize(u16);
-            const col_count: u16 = @intCast(@divTrunc(client_size.x + cell_size.x - 1, cell_size.x));
-            const row_count: u16 = @intCast(@divTrunc(client_size.y + cell_size.y - 1, cell_size.y));
+            const col_count: u16 = @intCast(@divTrunc(client_size.x + font.cell_size.x - 1, font.cell_size.x));
+            const row_count: u16 = @intCast(@divTrunc(client_size.y + font.cell_size.y - 1, font.cell_size.y));
             if (global.terminal.resize(
                 global.screen_arena.allocator(),
                 &state.screen,
@@ -640,9 +637,8 @@ fn WndProc(
             const client_size = getClientSize(u32, hwnd);
             const dpi = win32.dpiFromHwnd(hwnd);
             const font = getFont(dpi, global.font_size, &global.font_face);
-            const cell_size = font.getCellSize(u16);
-            const col_count: u16 = @intCast(@divTrunc(client_size.x + cell_size.x - 1, cell_size.x));
-            const row_count: u16 = @intCast(@divTrunc(client_size.y + cell_size.y - 1, cell_size.y));
+            const col_count: u16 = @intCast(@divTrunc(client_size.x + font.cell_size.x - 1, font.cell_size.x));
+            const row_count: u16 = @intCast(@divTrunc(client_size.y + font.cell_size.y - 1, font.cell_size.y));
 
             if (global.terminal.resize(
                 global.screen_arena.allocator(),
@@ -686,7 +682,7 @@ fn WndProc(
             // and re-scale it based on the new dpi ourselves
             const current_dpi = win32.dpiFromHwnd(hwnd);
             const font = getFont(current_dpi, global.font_size, &global.font_face);
-            const current_cell_size_i32 = font.getCellSize(i32);
+            const current_cell_size_i32 = font.cell_size.intCast(i32);
             const current_cell_size: XY(f32) = .{
                 .x = @floatFromInt(current_cell_size_i32.x),
                 .y = @floatFromInt(current_cell_size_i32.y),
@@ -848,7 +844,7 @@ fn updateWindowSize(
 ) void {
     const dpi = win32.dpiFromHwnd(hwnd);
     const font = getFont(dpi, global.font_size, &global.font_face);
-    const cell_size = font.getCellSize(i32);
+    const cell_size = font.cell_size.intCast(i32);
 
     var window_rect: win32.RECT = undefined;
     if (0 == win32.GetWindowRect(hwnd, &window_rect)) fatalWin32(

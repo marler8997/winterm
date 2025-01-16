@@ -67,12 +67,6 @@ pub const Font = struct {
     pub fn deinit(self: *Font) void {
         self.* = undefined;
     }
-    pub fn getCellSize(self: Font, comptime T: type) XY(T) {
-        return .{
-            .x = @intCast(self.cell_size.x),
-            .y = @intCast(self.cell_size.y),
-        };
-    }
 };
 
 pub fn render(

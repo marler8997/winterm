@@ -94,12 +94,6 @@ pub const Font = struct {
         self.arena.deinit(); // frees self.mem
         self.* = undefined;
     }
-    pub fn getCellSize(self: Font, comptime T: type) XY(T) {
-        return .{
-            .x = @intCast(self.cell_size.x),
-            .y = @intCast(self.cell_size.y),
-        };
-    }
 };
 
 pub fn determineCellSize(

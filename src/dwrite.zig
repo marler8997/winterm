@@ -84,13 +84,6 @@ pub const Font = struct {
         _ = self.text_format.IUnknown.Release();
         self.* = undefined;
     }
-
-    pub fn getCellSize(self: Font, comptime T: type) XY(T) {
-        return .{
-            .x = @intCast(self.cell_size.x),
-            .y = @intCast(self.cell_size.y),
-        };
-    }
 };
 
 fn fatalHr(what: []const u8, hresult: win32.HRESULT) noreturn {
