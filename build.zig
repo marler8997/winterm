@@ -1,8 +1,19 @@
 const std = @import("std");
 
+const Textrender = enum {
+    dwrite,
+    truetype,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    const truetype_enabled = b.option(
+        bool,
+        "truetype",
+        "Use https://codeberg.org/andrewrk/TrueType for text rendering",
+    ) orelse false;
 
     const win32_dep = b.dependency("win32", .{});
     const win32_mod = win32_dep.module("zigwin32");
@@ -13,6 +24,9 @@ pub fn build(b: *std.Build) void {
     });
 
     {
+        const options = b.addOptions();
+        options.addOption(Textrender, "textrender", if (truetype_enabled) .truetype else .dwrite);
+
         const exe = b.addExecutable(.{
             .name = "winterm",
             .root_source_file = b.path("src/main.zig"),
@@ -21,10 +35,17 @@ pub fn build(b: *std.Build) void {
             .win32_manifest = b.path("res/win32.manifest"),
             //.single_threaded = true,
         });
+        exe.root_module.addOptions("build_options", options);
         b.installArtifact(exe);
 
         exe.root_module.addImport("win32", win32_mod);
         exe.root_module.addImport("ghostty_terminal", ghostty_terminal_mod);
+
+        if (truetype_enabled) {
+            if (b.lazyDependency("truetype", .{})) |truetype_dep| {
+                exe.root_module.addImport("TrueType", truetype_dep.module("TrueType"));
+            }
+        }
 
         exe.subsystem = .Windows;
         exe.addIncludePath(b.path("res"));

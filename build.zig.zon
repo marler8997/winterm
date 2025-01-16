@@ -11,6 +11,11 @@
             .url = "git+https://github.com/ghostty-org/ghostty#132c4f1f68d75813370cadfc090f96a32be19705",
             .hash = "122029f9e7eafb40595403c4a06b5674139c1af3de104f2c50102fbe24e70bec6e2b",
         },
+        .truetype = .{
+            .url = "git+https://codeberg.org/andrewrk/TrueType#07de1ff9ab29b546fd2719026df6ce9188840ee7",
+            .hash = "1220a5ede2cd84c9d137f2439e6dacbc2cab965b63a1542264bb373f22aa13a4113b",
+            .lazy = true,
+        },
     },
     .paths = .{
         ".",

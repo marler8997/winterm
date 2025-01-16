@@ -1,0 +1,111 @@
+const TrueTypeRenderer = @This();
+
+const std = @import("std");
+const win32 = @import("win32").everything;
+const win32ext = @import("win32ext.zig");
+
+// add back when we're on a compatible version
+//const TrueType = @import("TrueType");
+const TrueType = struct {};
+const FontFace = @import("FontFace.zig");
+const XY = @import("xy.zig").XY;
+
+pub const needs_direct2d = false;
+
+pub fn init(
+    d2d_factory: void,
+    texture: *win32.ID3D11Texture2D,
+) TrueTypeRenderer {
+    _ = d2d_factory;
+    _ = texture;
+    // const dxgi_surface = win32ext.queryInterface(texture, win32.IDXGISurface);
+    // defer _ = dxgi_surface.IUnknown.Release();
+
+    return .{
+        // .render_target = render_target,
+        // .white_brush = white_brush,
+    };
+}
+pub fn deinit(self: *TrueTypeRenderer) void {
+    //self.ttf.definit();
+    self.* = undefined;
+}
+
+fn logFonts() void {
+    const fonts_path = "C:\\Windows\\Fonts";
+    var fonts_dir = std.fs.openDirAbsolute(fonts_path, .{ .iterate = true }) catch |e| std.debug.panic(
+        "open fonts dir failed with {s}",
+        .{@errorName(e)},
+    );
+    defer fonts_dir.close();
+    var iterator = fonts_dir.iterate();
+    while (iterator.next() catch |e| std.debug.panic(
+        "dir iterate failed with {s}",
+        .{@errorName(e)},
+    )) |entry| {
+        if (std.mem.endsWith(u8, entry.name, ".ttf")) {
+            std.debug.print("{s}\n", .{entry.name});
+        }
+    }
+}
+
+pub const Font = struct {
+    //ttf: TrueType,
+    cell_size: XY(u16),
+
+    pub fn init(dpi: u32, size: f32, face: *const FontFace) Font {
+        logFonts();
+
+        var path_buf: [400]u8 = undefined;
+        const path = std.fmt.bufPrint(
+            &path_buf,
+            "C:\\Windows\\Fonts\\{}.ttf",
+            .{std.unicode.fmtUtf16Le(face.slice())},
+        ) catch @panic("missing font");
+
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        // TODO: leak until I lean whether the TrueType object needs this memory
+        //defer arena.deinit();
+
+        const content = blk: {
+            const font = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
+                error.FileNotFound => @panic("missing font"),
+                else => |e| std.debug.panic(
+                    "open font file '{s}' failed with {s}",
+                    .{ path, @errorName(e) },
+                ),
+            };
+            defer font.close();
+            break :blk font.readToEndAlloc(arena.allocator(), std.math.maxInt(usize));
+        };
+
+        if (false) {
+            const ttf = TrueType.load(content) catch |e| switch (e) {};
+            _ = dpi;
+            _ = size;
+            return .{ .ttf = ttf, .cell_size = .{ .x = 20, .y = 35 } };
+        }
+        std.debug.panic("opened font '{s}' but TrueType don't work with zig 0.13.0", .{path});
+    }
+    pub fn deinit(self: *Font) void {
+        self.* = undefined;
+    }
+    pub fn getCellSize(self: Font, comptime T: type) XY(T) {
+        return .{
+            .x = @intCast(self.cell_size.x),
+            .y = @intCast(self.cell_size.y),
+        };
+    }
+};
+
+pub fn render(
+    self: *const TrueTypeRenderer,
+    font: Font,
+    utf8: []const u8,
+) void {
+    _ = self;
+    _ = font;
+    _ = utf8;
+    @panic("todo");
+}
