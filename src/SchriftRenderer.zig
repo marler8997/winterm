@@ -136,7 +136,7 @@ pub fn render(
     var mapped: win32.D3D11_MAPPED_SUBRESOURCE = undefined;
     {
         const hr = self.d3d_context.Map(&self.texture.ID3D11Resource, 0, .WRITE, 0, &mapped);
-        if (hr < 0) fatalHr("MapGlyphTexture", hr);
+        if (hr < 0) fatalHr("MapStagingTexture", hr);
     }
     defer self.d3d_context.Unmap(&self.texture.ID3D11Resource, 0);
 
