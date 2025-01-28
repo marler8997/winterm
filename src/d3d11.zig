@@ -10,6 +10,7 @@ const TextRenderer = switch (build_options.textrender) {
     .dwrite => @import("DwriteRenderer.zig"),
     .truetype => @import("TrueTypeRenderer.zig"),
     .schrift => @import("SchriftRenderer.zig"),
+    .celltype => @import("CellTypeRenderer.zig"),
 };
 
 const XY = @import("xy.zig").XY;

@@ -4,25 +4,23 @@ const Textrender = enum {
     dwrite,
     truetype,
     schrift,
+    celltype,
 };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const truetype_enabled = b.option(
-        bool,
-        "truetype",
-        "Use https://codeberg.org/andrewrk/TrueType for text rendering",
-    ) orelse false;
-    const schrift_enabled = b.option(
-        bool,
-        "schrift",
-        "Use libschrift for text rendering",
-    ) orelse false;
-    if (truetype_enabled and schrift_enabled) {
-        std.log.err("cannot enable both truetype and schrift", .{});
-        std.process.exit(0xff);
+    var textrender_opt = b.option(Textrender, "text", "select a text renderer");
+    if (true == b.option(bool, "schrift", "equivalent of -Dtext=schrift")) {
+        @panic("todo");
+    }
+    if (true == b.option(bool, "celltype", "equivalent of -Dtext=celltype")) {
+        if (textrender_opt) |t| std.debug.panic(
+            "cannot specify both {s} and {s} text renderers",
+            .{ @tagName(t), @tagName(Textrender.celltype) },
+        );
+        textrender_opt = .celltype;
     }
 
     const win32_dep = b.dependency("win32", .{});
@@ -35,11 +33,7 @@ pub fn build(b: *std.Build) void {
 
     {
         const options = b.addOptions();
-        options.addOption(Textrender, "textrender", if (truetype_enabled)
-            .truetype
-        else
-            (if (schrift_enabled) .schrift else .dwrite));
-
+        options.addOption(Textrender, "textrender", textrender_opt orelse .dwrite);
         const exe = b.addExecutable(.{
             .name = "winterm",
             .root_source_file = b.path("src/main.zig"),
@@ -54,18 +48,24 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addImport("win32", win32_mod);
         exe.root_module.addImport("ghostty_terminal", ghostty_terminal_mod);
 
-        if (truetype_enabled) {
-            if (b.lazyDependency("truetype", .{})) |truetype_dep| {
-                exe.root_module.addImport("TrueType", truetype_dep.module("TrueType"));
-            }
-        }
-        if (schrift_enabled) {
-            if (b.lazyDependency("schrift", .{})) |schrift_dep| {
-                exe.root_module.addImport("schrift", b.createModule(.{
-                    .root_source_file = schrift_dep.path("schrift.zig"),
-                }));
-            }
-        }
+        if (textrender_opt) |t| switch (t) {
+            .dwrite => {},
+            .truetype => {
+                if (b.lazyDependency("truetype", .{})) |truetype_dep| {
+                    exe.root_module.addImport("TrueType", truetype_dep.module("TrueType"));
+                }
+            },
+            .schrift => {
+                if (b.lazyDependency("schrift", .{})) |schrift_dep| {
+                    exe.root_module.addImport("schrift", b.createModule(.{
+                        .root_source_file = schrift_dep.path("schrift.zig"),
+                    }));
+                }
+            },
+            .celltype => if (b.lazyDependency("celltype", .{})) |celltype| {
+                exe.root_module.addImport("celltype", celltype.module("celltype"));
+            },
+        };
 
         exe.subsystem = .Windows;
         exe.addIncludePath(b.path("res"));
