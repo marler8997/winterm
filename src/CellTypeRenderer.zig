@@ -28,18 +28,53 @@ pub fn deinit(self: CodefontRenderer) void {
     _ = self;
 }
 
+const default_aspect_ratio = 0.5;
+
+const FontSize = struct {
+    height: f32,
+    aspect_ratio: f32,
+    pub fn eql(self: FontSize, other: FontSize) bool {
+        return self.height == other.height and self.aspect_ratio == other.aspect_ratio;
+    }
+};
+
+pub const FontOptions = struct {
+    size: FontSize,
+    pub const default: FontOptions = .{
+        .size = .{ .height = 16, .aspect_ratio = default_aspect_ratio },
+    };
+    pub fn eql(self: *const FontOptions, other: *const FontOptions) bool {
+        return self.size.eql(other.size);
+    }
+    pub fn setSize(self: *FontOptions, size: FontSize) void {
+        self.size = size;
+    }
+    pub fn parseSize(size_str: []const u8) !FontSize {
+        const sep_index = std.mem.indexOfScalar(u8, size_str, ':') orelse size_str.len;
+        const height_str = size_str[0..sep_index];
+        const height = try std.fmt.parseFloat(f32, height_str);
+        const aspect_ratio: f32 = blk: {
+            if (sep_index == size_str.len) break :blk default_aspect_ratio;
+            const ar_str = size_str[sep_index + 1 ..];
+            break :blk try std.fmt.parseFloat(f32, ar_str);
+        };
+        return .{ .height = height, .aspect_ratio = aspect_ratio };
+    }
+};
+
 pub const Font = struct {
     // public field
     cell_size: XY(u16),
 
-    pub fn init(dpi: u32, size: f32, face: *const FontFace) Font {
-        _ = face;
+    pub fn init(dpi: u32, options: *const FontOptions) Font {
         const dpi_factor: f32 = @as(f32, @floatFromInt(dpi)) / 96.0;
-        const scaled_size = dpi_factor * size;
-        const height: f32 = @round(scaled_size);
-        // TODO: make this configurable
-        const width: f32 = @round(height / 1.618033988749);
-        return .{ .cell_size = .{ .x = @intFromFloat(width), .y = @intFromFloat(height) } };
+        const height: u16 = @intFromFloat(@round(dpi_factor * options.size.height));
+        const width: u16 = @intFromFloat(@round(@as(f32, @floatFromInt(height)) * options.size.aspect_ratio));
+        std.log.info(
+            "font size {d}:{d} > {}x{} at dpi {}",
+            .{ options.size.height, options.size.aspect_ratio, width, height, dpi },
+        );
+        return .{ .cell_size = .{ .x = width, .y = height } };
     }
     pub fn deinit(self: Font) void {
         _ = self;
@@ -60,7 +95,8 @@ pub fn render(self: *CodefontRenderer, font: Font, utf8: []const u8) void {
         u16,
         font.cell_size.x,
         font.cell_size.y,
-        celltype.default_weight,
+        // we want a little thicker than the default I think
+        celltype.default_weight * 1.5,
     );
     const config: celltype.Config = .{};
     const bytes_rendered = celltype.renderText(

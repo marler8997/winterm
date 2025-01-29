@@ -8,6 +8,7 @@ const dwrite = @import("dwrite.zig");
 const XY = @import("xy.zig").XY;
 
 pub const Font = dwrite.Font;
+pub const FontOptions = dwrite.FontOptions;
 
 pub const needs_d3d_context = false;
 pub const needs_direct2d = true;

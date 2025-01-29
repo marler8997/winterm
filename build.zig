@@ -12,9 +12,6 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     var textrender_opt = b.option(Textrender, "text", "select a text renderer");
-    if (true == b.option(bool, "schrift", "equivalent of -Dtext=schrift")) {
-        @panic("todo");
-    }
     if (true == b.option(bool, "celltype", "equivalent of -Dtext=celltype")) {
         if (textrender_opt) |t| std.debug.panic(
             "cannot specify both {s} and {s} text renderers",

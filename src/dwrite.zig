@@ -22,28 +22,46 @@ pub fn init() void {
     }
 }
 
+pub const FontOptions = struct {
+    size: f32,
+    face: FontFace,
+    pub const default: FontOptions = .{
+        .size = 14.0,
+        .face = FontFace.initUtf8("Cascadia Code") catch unreachable,
+    };
+    pub fn eql(self: *const FontOptions, other: *const FontOptions) bool {
+        return self.size == other.size and self.face.eql(&other.face);
+    }
+    pub fn setSize(self: *FontOptions, size: f32) void {
+        self.size = size;
+    }
+    pub fn parseSize(size_str: []const u8) !f32 {
+        return std.fmt.parseFloat(f32, size_str);
+    }
+};
+
 pub const Font = struct {
     // public field
     cell_size: XY(u16),
 
     text_format: *win32.IDWriteTextFormat,
 
-    pub fn init(dpi: u32, size: f32, face: *const FontFace) Font {
+    pub fn init(dpi: u32, options: *const FontOptions) Font {
         var text_format: *win32.IDWriteTextFormat = undefined;
         {
             const hr = global.dwrite_factory.CreateTextFormat(
-                face.ptr(),
+                options.face.ptr(),
                 null,
                 .NORMAL, //weight
                 .NORMAL, // style
                 .NORMAL, // stretch
-                win32.scaleDpi(f32, size, dpi),
+                win32.scaleDpi(f32, options.size, dpi),
                 win32.L(""), // locale
                 &text_format,
             );
             if (hr < 0) std.debug.panic(
                 "CreateTextFormat '{}' height {d} failed, hresult=0x{x}",
-                .{ std.unicode.fmtUtf16le(face.slice()), size, @as(u32, @bitCast(hr)) },
+                .{ std.unicode.fmtUtf16le(options.face.slice()), options.size, @as(u32, @bitCast(hr)) },
             );
         }
         errdefer _ = text_format.IUnknown.Release();

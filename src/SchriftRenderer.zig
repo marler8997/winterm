@@ -35,6 +35,24 @@ pub fn deinit(self: *SchriftRenderer) void {
     self.* = undefined;
 }
 
+pub const FontOptions = struct {
+    size: f32,
+    face: FontFace,
+    pub const default: FontOptions = .{
+        .size = 14.0,
+        .face = FontFace.initUtf8("CascadiaCode") catch unreachable,
+    };
+    pub fn eql(self: *const FontOptions, other: *const FontOptions) bool {
+        return self.size == other.size and self.face.eql(&other.face);
+    }
+    pub fn setSize(self: *FontOptions, size: f32) void {
+        self.size = size;
+    }
+    pub fn parseSize(size_str: []const u8) !f32 {
+        return std.fmt.parseFloat(f32, size_str);
+    }
+};
+
 pub const Font = struct {
     // public field
     cell_size: XY(u16),
@@ -44,14 +62,14 @@ pub const Font = struct {
     mem: []const u8,
     info: schrift.TtfInfo,
 
-    pub fn init(dpi: u32, size: f32, face: *const FontFace) Font {
+    pub fn init(dpi: u32, options: *const FontOptions) Font {
         win32font.logFonts();
 
         var path_buf: [400]u8 = undefined;
         const path = std.fmt.bufPrint(
             &path_buf,
             "C:\\Windows\\Fonts\\{}.ttf",
-            .{std.unicode.fmtUtf16Le(face.slice())},
+            .{std.unicode.fmtUtf16Le(options.face.slice())},
         ) catch @panic("missing font");
 
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -77,7 +95,7 @@ pub const Font = struct {
         );
 
         const dpi_factor: f32 = @as(f32, @floatFromInt(dpi)) / 96.0;
-        const scale: f32 = dpi_factor * size;
+        const scale: f32 = dpi_factor * options.size;
         const cell_size = determineCellSize(ttf_mem, info, scale) catch |e| std.debug.panic(
             "{s} parse error: {s}",
             .{ path, @errorName(e) },

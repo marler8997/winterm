@@ -16,6 +16,7 @@ const TextRenderer = switch (build_options.textrender) {
 const XY = @import("xy.zig").XY;
 
 pub const Font = TextRenderer.Font;
+pub const FontOptions = TextRenderer.FontOptions;
 
 const log = std.log.scoped(.d3d);
 

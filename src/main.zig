@@ -7,13 +7,14 @@ const c = @cImport({
 
 const ChildProcess = @import("ChildProcess.zig");
 const Error = @import("Error.zig");
-const FontFace = @import("FontFace.zig");
 const GridPos = @import("GridPos.zig");
 const render = @import("d3d11.zig");
 const Screen = @import("Screen.zig");
 const Terminal = @import("Terminal.zig");
 const windowmsg = @import("windowmsg.zig");
 const XY = @import("xy.zig").XY;
+
+const FontOptions = render.FontOptions;
 
 pub const std_options: std.Options = .{
     .log_level = .info,
@@ -33,8 +34,7 @@ const global = struct {
     var icons: Icons = undefined;
     var state: ?State = null;
 
-    var font_face: FontFace = getDefaultFontFace();
-    var font_size: f32 = 14.0;
+    var font_options: FontOptions = FontOptions.default;
     var font: ?Font = null;
 
     var screen_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -64,34 +64,24 @@ fn stateFromHwnd(hwnd: win32.HWND) *State {
     return &global.state.?;
 }
 
-fn getDefaultFontFace() FontFace {
-    const default_wide = win32.L("Cascadia Code");
-    var result: FontFace = .{ .buf = undefined, .len = default_wide.len };
-    @memcpy(result.buf[0..default_wide.len], default_wide);
-    result.buf[default_wide.len] = 0;
-    return result;
-}
-
-fn getFont(dpi: u32, size: f32, face: *const FontFace) render.Font {
+fn getFont(dpi: u32, options: *const FontOptions) render.Font {
     if (global.font) |*font| {
-        if (font.dpi == dpi and font.size == size and font.face.eql(face))
+        if (font.dpi == dpi and font.options.eql(options))
             return font.render_object;
         font.render_object.deinit();
         global.font = null;
     }
     global.font = .{
         .dpi = dpi,
-        .size = size,
-        .face = face.*,
-        .render_object = render.Font.init(dpi, size, face),
+        .options = options.*,
+        .render_object = render.Font.init(dpi, options),
     };
     return global.font.?.render_object;
 }
 
 const Font = struct {
     dpi: u32,
-    size: f32,
-    face: FontFace,
+    options: FontOptions,
     render_object: render.Font,
 };
 
@@ -320,6 +310,14 @@ pub export fn wWinMain(
                     "--top cmdline option '{s}' is not a number",
                     .{str},
                 );
+            } else if (std.mem.eql(u8, arg, "--font-size")) {
+                const str = it.next() orelse std.debug.panic("missing argument for --font-size", .{});
+                global.font_options.setSize(
+                    FontOptions.parseSize(str) catch |e| std.debug.panic(
+                        "invalid --font-size value '{s}' ({s})",
+                        .{ str, @errorName(e) },
+                    ),
+                );
             } else if (std.mem.eql(u8, arg, "--font")) {
                 @panic("todo");
                 //     const font = it.next() orelse fatal("missing argument for --font", .{});
@@ -365,7 +363,7 @@ pub export fn wWinMain(
     };
 
     global.icons = getIcons(dpi);
-    const cell_size = getFont(@max(dpi.x, dpi.y), global.font_size, &global.font_face).cell_size.intCast(i32);
+    const cell_size = getFont(@max(dpi.x, dpi.y), &global.font_options).cell_size.intCast(i32);
     const placement = calcWindowPlacement(
         maybe_monitor,
         @max(dpi.x, dpi.y),
@@ -505,7 +503,7 @@ fn WndProc(
 
             const client_size = getClientSize(u16, hwnd);
             const dpi = win32.dpiFromHwnd(hwnd);
-            const font = getFont(dpi, global.font_size, &global.font_face);
+            const font = getFont(dpi, &global.font_options);
             const cell_count: GridPos = .{
                 .row = @intCast(@divTrunc(client_size.y + font.cell_size.y - 1, font.cell_size.y)),
                 .col = @intCast(@divTrunc(client_size.x + font.cell_size.x - 1, font.cell_size.x)),
@@ -597,7 +595,7 @@ fn WndProc(
         win32.WM_SIZING => {
             const rect: *win32.RECT = @ptrFromInt(@as(usize, @bitCast(lparam)));
             const dpi = win32.dpiFromHwnd(hwnd);
-            const font = getFont(dpi, global.font_size, &global.font_face);
+            const font = getFont(dpi, &global.font_options);
             const new_rect = calcWindowRect(dpi, rect.*, wparam, font.cell_size.intCast(i32));
             const state = stateFromHwnd(hwnd);
             state.bounds = .{
@@ -611,7 +609,7 @@ fn WndProc(
             const state = stateFromHwnd(hwnd);
             const client_size = getClientSize(u16, hwnd);
             const dpi = win32.dpiFromHwnd(hwnd);
-            const font = getFont(dpi, global.font_size, &global.font_face);
+            const font = getFont(dpi, &global.font_options);
             const col_count: u16 = @intCast(@divTrunc(client_size.x + font.cell_size.x - 1, font.cell_size.x));
             const row_count: u16 = @intCast(@divTrunc(client_size.y + font.cell_size.y - 1, font.cell_size.y));
             if (global.terminal.resize(
@@ -636,7 +634,7 @@ fn WndProc(
             const state = stateFromHwnd(hwnd);
             const client_size = getClientSize(u32, hwnd);
             const dpi = win32.dpiFromHwnd(hwnd);
-            const font = getFont(dpi, global.font_size, &global.font_face);
+            const font = getFont(dpi, &global.font_options);
             const col_count: u16 = @intCast(@divTrunc(client_size.x + font.cell_size.x - 1, font.cell_size.x));
             const row_count: u16 = @intCast(@divTrunc(client_size.y + font.cell_size.y - 1, font.cell_size.y));
 
@@ -681,7 +679,7 @@ fn WndProc(
             // the dpi change is effective, so, we get the cell size from the current font/dpi
             // and re-scale it based on the new dpi ourselves
             const current_dpi = win32.dpiFromHwnd(hwnd);
-            const font = getFont(current_dpi, global.font_size, &global.font_face);
+            const font = getFont(current_dpi, &global.font_options);
             const current_cell_size_i32 = font.cell_size.intCast(i32);
             const current_cell_size: XY(f32) = .{
                 .x = @floatFromInt(current_cell_size_i32.x),
@@ -725,6 +723,7 @@ fn WndProc(
                 state.reportError("pty closed", .{});
                 return 0;
             };
+
             // NOTE: we only handle characters that we don't receive in WM_CHAR
             const key: Terminal.Key = switch (wparam) {
                 @intFromEnum(win32.VK_LEFT) => .left,
