@@ -23,7 +23,14 @@ pub fn build(b: *std.Build) void {
     const win32_dep = b.dependency("win32", .{});
     const win32_mod = win32_dep.module("zigwin32");
 
-    const ghostty_dep = b.dependency("ghostty", .{});
+    // we fetch ghostty ourselves instead of in build.zig.zon because we don't
+    // want to download all its dependencies.  This would be fixed if/when zig
+    // fixes lazy dependencies.
+    //const ghostty_dep = b.dependency("ghostty", .{});
+    const ghostty_dep = ZigFetch.create(b, .{
+        .url = "git+https://github.com/ghostty-org/ghostty#132c4f1f68d75813370cadfc090f96a32be19705",
+        .hash = "122029f9e7eafb40595403c4a06b5674139c1af3de104f2c50102fbe24e70bec6e2b",
+    });
     const ghostty_terminal_mod = b.createModule(.{
         .root_source_file = ghostty_dep.path("src/terminal/main.zig"),
     });
@@ -98,3 +105,77 @@ pub fn build(b: *std.Build) void {
         b.step("testapp", "Run the testapp").dependOn(&run.step);
     }
 }
+
+const ZigFetchOptions = struct {
+    url: []const u8,
+    hash: []const u8,
+};
+const ZigFetch = struct {
+    step: std.Build.Step,
+    url: []const u8,
+    hash: []const u8,
+
+    already_fetched: bool,
+    pkg_path_dont_use_me_directly: []const u8,
+    lazy_fetch_stdout: std.Build.LazyPath,
+    generated_directory: std.Build.GeneratedFile,
+    pub fn create(b: *std.Build, opt: ZigFetchOptions) *ZigFetch {
+        const run = b.addSystemCommand(&.{ b.graph.zig_exe, "fetch", opt.url });
+        const fetch = b.allocator.create(ZigFetch) catch @panic("OOM");
+        const pkg_path = b.pathJoin(&.{
+            b.graph.global_cache_root.path.?,
+            "p",
+            opt.hash,
+        });
+        const already_fetched = if (std.fs.cwd().access(pkg_path, .{}))
+            true
+        else |err| switch (err) {
+            error.FileNotFound => false,
+            else => |e| std.debug.panic("access '{s}' failed with {s}", .{ pkg_path, @errorName(e) }),
+        };
+        fetch.* = .{
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .name = b.fmt("zig fetch {s}", .{opt.url}),
+                .owner = b,
+                .makeFn = make,
+            }),
+            .url = b.allocator.dupe(u8, opt.url) catch @panic("OOM"),
+            .hash = b.allocator.dupe(u8, opt.hash) catch @panic("OOM"),
+            .pkg_path_dont_use_me_directly = pkg_path,
+            .already_fetched = already_fetched,
+            .lazy_fetch_stdout = run.captureStdOut(),
+            .generated_directory = .{
+                .step = &fetch.step,
+            },
+        };
+        if (!already_fetched) {
+            fetch.step.dependOn(&run.step);
+        }
+        return fetch;
+    }
+    pub fn getLazyPath(self: *const ZigFetch) std.Build.LazyPath {
+        return .{ .generated = .{ .file = &self.generated_directory } };
+    }
+    pub fn path(self: *ZigFetch, sub_path: []const u8) std.Build.LazyPath {
+        return self.getLazyPath().path(self.step.owner, sub_path);
+    }
+    fn make(step: *std.Build.Step, prog_node: std.Progress.Node) !void {
+        _ = prog_node;
+        const b = step.owner;
+        const fetch: *ZigFetch = @fieldParentPtr("step", step);
+        if (!fetch.already_fetched) {
+            const sha = blk: {
+                var file = try std.fs.openFileAbsolute(fetch.lazy_fetch_stdout.getPath(b), .{});
+                defer file.close();
+                break :blk try file.readToEndAlloc(b.allocator, 999);
+            };
+            const sha_stripped = std.mem.trimRight(u8, sha, "\r\n");
+            if (!std.mem.eql(u8, sha_stripped, fetch.hash)) return step.fail(
+                "hash mismatch: declared {s} but the fetched package has {s}",
+                .{ fetch.hash, sha_stripped },
+            );
+        }
+        fetch.generated_directory.path = fetch.pkg_path_dont_use_me_directly;
+    }
+};
