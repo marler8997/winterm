@@ -203,7 +203,7 @@ fn calcWindowPlacement(
         var info: win32.MONITORINFO = undefined;
         info.cbSize = @sizeOf(win32.MONITORINFO);
         if (0 == win32.GetMonitorInfoW(monitor, &info)) {
-            std.log.warn("GetMonitorInfo failed with {}", .{win32.GetLastError().fmt()});
+            std.log.warn("GetMonitorInfo failed, error={}", .{win32.GetLastError()});
             return result;
         }
         break :blk info.rcWork;
@@ -340,7 +340,7 @@ pub export fn wWinMain(
             },
             win32.MONITOR_DEFAULTTOPRIMARY,
         ) orelse {
-            std.log.warn("MonitorFromPoint failed with {}", .{win32.GetLastError().fmt()});
+            std.log.warn("MonitorFromPoint failed, error={}", .{win32.GetLastError()});
             break :blk null;
         };
     };
@@ -918,28 +918,12 @@ fn getIcons(dpi: XY(u32)) Icons {
     return .{ .small = @ptrCast(small), .large = @ptrCast(large) };
 }
 
-threadlocal var thread_is_panicing = false;
-
-pub fn panic(
-    msg: []const u8,
-    error_return_trace: ?*std.builtin.StackTrace,
-    ret_addr: ?usize,
-) noreturn {
-    if (!thread_is_panicing) {
-        thread_is_panicing = true;
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        const msg_z: [:0]const u8 = if (std.fmt.allocPrintZ(
-            arena.allocator(),
-            "{s}",
-            .{msg},
-        )) |msg_z| msg_z else |_| "failed allocate error message";
-        _ = win32.MessageBoxA(null, msg_z, "WinTerm Panic!", .{ .ICONASTERISK = 1 });
-    }
-    std.builtin.default_panic(msg, error_return_trace, ret_addr);
-}
+pub const panic = win32.messageBoxThenPanic(.{
+    .title = "WinTerm Panic!",
+});
 
 fn fatalWin32(what: []const u8, err: win32.WIN32_ERROR) noreturn {
-    std.debug.panic("{s} failed with {}", .{ what, err.fmt() });
+    std.debug.panic("{s} failed, error={}", .{ what, err });
 }
 fn fatalHr(what: []const u8, hresult: win32.HRESULT) noreturn {
     std.debug.panic("{s} failed, hresult=0x{x}", .{ what, @as(u32, @bitCast(hresult)) });

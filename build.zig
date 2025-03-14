@@ -21,15 +21,15 @@ pub fn build(b: *std.Build) void {
     }
 
     const win32_dep = b.dependency("win32", .{});
-    const win32_mod = win32_dep.module("zigwin32");
+    const win32_mod = win32_dep.module("win32");
 
     // we fetch ghostty ourselves instead of in build.zig.zon because we don't
     // want to download all its dependencies.  This would be fixed if/when zig
     // fixes lazy dependencies.
     //const ghostty_dep = b.dependency("ghostty", .{});
     const ghostty_dep = ZigFetch.create(b, .{
-        .url = "git+https://github.com/ghostty-org/ghostty#132c4f1f68d75813370cadfc090f96a32be19705",
-        .hash = "122029f9e7eafb40595403c4a06b5674139c1af3de104f2c50102fbe24e70bec6e2b",
+        .url = "git+https://github.com/ghostty-org/ghostty#4ab3754a59d09b59b36c0f8c865e8dc7ab3dea7b",
+        .hash = "ghostty-1.1.3-5UdBC1KW6QILH6XsgWigz3g9wwEcyrvtTFYOxFnog_sE",
     });
     const ghostty_terminal_mod = b.createModule(.{
         .root_source_file = ghostty_dep.path("src/terminal/main.zig"),
@@ -160,8 +160,8 @@ const ZigFetch = struct {
     pub fn path(self: *ZigFetch, sub_path: []const u8) std.Build.LazyPath {
         return self.getLazyPath().path(self.step.owner, sub_path);
     }
-    fn make(step: *std.Build.Step, prog_node: std.Progress.Node) !void {
-        _ = prog_node;
+    fn make(step: *std.Build.Step, opt: std.Build.Step.MakeOptions) !void {
+        _ = opt;
         const b = step.owner;
         const fetch: *ZigFetch = @fieldParentPtr("step", step);
         if (!fetch.already_fetched) {

@@ -291,7 +291,7 @@ fn readConsoleThread(
     read: win32.HANDLE,
 ) void {
     while (true) {
-        var buffer: [std.mem.page_size]u8 = undefined;
+        var buffer: [4096]u8 = undefined;
         var read_len: u32 = undefined;
         if (0 == win32.ReadFile(
             read,
@@ -310,7 +310,7 @@ fn readConsoleThread(
             .ERROR_NO_DATA => {
                 @panic("todo: nodata");
             },
-            else => |e| std.debug.panic("todo: handle error {}", .{e.fmt()}),
+            else => |e| std.debug.panic("todo: handle error {}", .{e}),
         };
         if (read_len == 0) {
             @panic("possible for ReadFile to return 0 bytes?");

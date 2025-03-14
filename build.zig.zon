@@ -1,11 +1,12 @@
 .{
-    .name = "winterm",
+    .name = .winterm,
     .version = "0.0.0",
-    .minimum_zig_version = "0.13.0",
+    .fingerprint = 0x39119ef409393c5a,
+    .minimum_zig_version = "0.14.0",
     .dependencies = .{
         .win32 = .{
-            .url = "git+https://github.com/marlersoft/zigwin32#73de834b8c062849320148bfb3d872bf55146c01",
-            .hash = "122093b6b38b11c27a48c4822511aa41b4fff36719f2cb3bb7fe0f8aec2f7b89fa52",
+            .url = "git+https://github.com/marlersoft/zigwin32#463e968fd43b98d1f4bc9e12c6eaab607a6e2e32",
+            .hash = "zigwin32-25.0.28-preview-AAAAAMco_ANvuBFnzPa3labgyPqid2015o7CWgOHtT1_",
         },
         .truetype = .{
             .url = "git+https://codeberg.org/andrewrk/TrueType#07de1ff9ab29b546fd2719026df6ce9188840ee7",
@@ -18,8 +19,8 @@
             .lazy = true,
         },
         .celltype = .{
-            .url = "git+https://github.com/marler8997/CellType#299cbe188e07504ac7b2e007b953ef54c55a6b8e",
-            .hash = "122007a15ba1addf560b1c57e23ab3ad49c0253d5bad48e24bebcb5b57a1362a5633",
+            .url = "git+https://github.com/marler8997/CellType#8836a2e3d793bb8062890af071845b41c5b3f26b",
+            .hash = "celltype-0.0.0-hmHVU4JgAgC--FJ5ibbZKcHJBTERK0Y5gwh_ySRHZQV5",
             .lazy = true,
         },
     },

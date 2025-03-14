@@ -64,7 +64,7 @@ pub fn PagedMem(comptime page_size: usize) type {
         }
 
         pub fn getReadBuf(self: *Self) error{OutOfMemory}![]u8 {
-            if (page_size != std.mem.page_size) @compileError("cannot call getReadBuf unless page size is std.mem.page_size");
+            if (page_size != std.mem.page_size_min) @compileError("cannot call getReadBuf unless page size is std.mem.page_size");
 
             const capacity = self.getCapacity();
             if (self.len == capacity) {

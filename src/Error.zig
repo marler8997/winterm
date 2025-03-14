@@ -33,7 +33,7 @@ const Code = union(enum) {
     ) !void {
         switch (self) {
             .zig => |e| try writer.print("error {s}", .{@errorName(e)}),
-            .win32 => |c| try c.fmt().format(fmt, options, writer),
+            .win32 => |c| try c.format(fmt, options, writer),
             .hresult => |hr| try writer.print("HRESULT 0x{x}", .{@as(u32, @bitCast(hr))}),
         }
     }
